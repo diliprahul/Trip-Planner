@@ -1,0 +1,33 @@
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Backend
+target/
+*.log
+
+# Frontend (Vite)
+node_modules/
+dist/
+.env
+# Local API testing files
+body.json
+body_paris.json
+hyderabad.json
+paris.json
+paris_id.txt
+paris_result.json
+response.json
+trip_id.txt
+trip-request.json
+trip_req.json
+trip_request.json
+trip_request_london_paris.json
+trip_request_new.json
+trip_request_temp.json
+test_*.json
+test_*.txt
+overpass_*.txt
