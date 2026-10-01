@@ -7,6 +7,10 @@ public interface OverpassService {
 
     List<PlaceResult> getTouristPlaces(double lat, double lon);
 
+    default List<PlaceResult> getTouristPlaces(double lat, double lon, int minCount) {
+        return getTouristPlaces(lat, lon);
+    }
+
     List<PlaceResult> getHotels(double lat, double lon);
 
     // 🚧 Stub for future use (DO NOT REMOVE)

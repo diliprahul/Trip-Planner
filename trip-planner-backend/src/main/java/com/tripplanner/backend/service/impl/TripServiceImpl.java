@@ -97,7 +97,7 @@ public class TripServiceImpl implements TripService {
         // These independent OSM requests are the slow part of generation. Run them together,
         // while retaining the same real OSM-only data source for both sections.
         long osmStartedAt = System.nanoTime();
-        CompletableFuture<List<PlaceResult>> placesFuture = CompletableFuture.supplyAsync(() -> fetchPlacesSafely(trip));
+        CompletableFuture<List<PlaceResult>> placesFuture = CompletableFuture.supplyAsync(() -> fetchPlacesSafely(trip, days));
         CompletableFuture<List<PlaceResult>> hotelsFuture = CompletableFuture.supplyAsync(() -> fetchHotelsSafely(trip));
 
         // Use only named OpenStreetMap places, so no generated or generic places appear.
@@ -129,7 +129,7 @@ public class TripServiceImpl implements TripService {
                 hotelPlaces.stream()
                         .filter(h -> h.getName() != null)
                         .filter(this::isAccommodation)
-                        .limit(3)
+                        .limit(5)
                         .map(h -> HotelSuggestion.builder()
                                 .trip(trip)
                                 .name(h.getName())
@@ -176,12 +176,13 @@ public class TripServiceImpl implements TripService {
     // =========================================================
     // HELPERS
     // =========================================================
-    private List<PlaceResult> fetchPlacesSafely(Trip trip) {
+    private List<PlaceResult> fetchPlacesSafely(Trip trip, int days) {
         try {
             return Optional.ofNullable(
                     overpassService.getTouristPlaces(
                             trip.getLatitude(),
-                            trip.getLongitude()
+                            trip.getLongitude(),
+                            days
                     )
             ).orElse(List.of());
         } catch (Exception e) {
@@ -244,11 +245,15 @@ public class TripServiceImpl implements TripService {
         // 3. Filter based on tourism tag
         if (tourism == null) return false;
         
-        // 4. Accept only genuine accommodation types
+        // 4. Accept genuine accommodation types including apartment, resort, inn, lodge
         return tourism.contains("hotel") ||
                tourism.contains("guest_house") ||
                tourism.contains("motel") ||
-               tourism.contains("hostel");
+               tourism.contains("hostel") ||
+               tourism.contains("apartment") ||
+               tourism.contains("resort") ||
+               tourism.contains("inn") ||
+               tourism.contains("lodge");
     }
 
     private boolean isUsableLocation(GeoLocation location) {
