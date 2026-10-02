@@ -56,7 +56,7 @@ public class TripServiceImpl implements TripService {
                         .startDate(request.getStartDate())
                         .endDate(request.getEndDate())
                         .days((int) days)
-                        .categories(request.getCategories())
+                        .placeCategories(request.getPlaceCategories())
                         .build()
         );
 
@@ -201,6 +201,13 @@ public class TripServiceImpl implements TripService {
     }
 
     private List<PlaceResult> selectUsefulPlaces(List<PlaceResult> places, Trip trip) {
+        List<String> userCats = trip.getPlaceCategories();
+        boolean hasFilter = userCats != null && !userCats.isEmpty()
+                && !userCats.stream().anyMatch(c -> c.equalsIgnoreCase("sightseeing") || c.equalsIgnoreCase("all") || c.equalsIgnoreCase("all places"));
+        Set<String> normalizedUserCats = hasFilter
+                ? userCats.stream().filter(Objects::nonNull).map(c -> c.toUpperCase(Locale.ROOT)).collect(Collectors.toSet())
+                : Collections.emptySet();
+
         Set<String> names = new HashSet<>();
         return places.stream()
                 .filter(Objects::nonNull)
@@ -208,6 +215,11 @@ public class TripServiceImpl implements TripService {
                 .filter(p -> p.getLatitude() != null && p.getLongitude() != null)
                 .filter(p -> !isNoise(p.getName()))
                 .filter(p -> !p.getName().toLowerCase(Locale.ROOT).contains("sightseeing"))
+                .filter(p -> {
+                    if (!hasFilter || normalizedUserCats.isEmpty()) return true;
+                    Set<String> pCats = getCategories(p);
+                    return pCats.stream().anyMatch(normalizedUserCats::contains);
+                })
                 .filter(p -> names.add(normalizeName(p.getName())))
                 .sorted(Comparator.comparingInt(this::getRelevanceScore).reversed()
                         .thenComparing(p -> distanceSquared(trip, p)))
@@ -275,25 +287,89 @@ public class TripServiceImpl implements TripService {
                 n.contains("bus stop") || n.contains("parking");
     }
 
-    private int getRelevanceScore(PlaceResult p) {
+    int getRelevanceScore(PlaceResult p) {
         int score = 0;
-        String n = p.getName().toLowerCase();
-        if (n.contains("fort") || n.contains("palace") || n.contains("museum") || n.contains("heritage")) score += 100;
-        if (n.contains("temple") || n.contains("lake") || n.contains("park") || n.contains("garden")) score += 60;
-        if (n.contains("market")) score += 40;
-        if (n.contains("view point") || n.contains("viewpoint")) score += 10;
+        Map<String, String> tags = p.getTags() != null ? p.getTags() : Collections.emptyMap();
+        
+        String historic = tags.getOrDefault("historic", "").toLowerCase(Locale.ROOT);
+        String tourism = tags.getOrDefault("tourism", "").toLowerCase(Locale.ROOT);
+        String amenity = tags.getOrDefault("amenity", "").toLowerCase(Locale.ROOT);
+        String designation = tags.getOrDefault("designation", "").toLowerCase(Locale.ROOT);
+        String heritage = tags.getOrDefault("heritage", "").toLowerCase(Locale.ROOT);
+        String religion = tags.getOrDefault("religion", "").toLowerCase(Locale.ROOT);
+        String denomination = tags.getOrDefault("denomination", "").toLowerCase(Locale.ROOT);
+
+        // 1. Core Prominence Signals (Wikidata / Wikipedia)
+        if (tags.containsKey("wikidata")) {
+            score += 100;
+        }
+        if (tags.containsKey("wikipedia")) {
+            score += 90;
+        }
+
+        // 2. Landmark, Heritage & Historic Significance
+        if (!heritage.isBlank() || tourism.contains("heritage")) {
+            score += 60;
+        }
+        if (!designation.isBlank()) {
+            score += 50;
+        }
+        if (!historic.isBlank()) {
+            score += 40;
+        }
+        if (tourism.contains("museum") || tourism.contains("zoo") || tourism.contains("theme_park")) {
+            score += 40;
+        } else if (tourism.contains("attraction") || tourism.contains("viewpoint")) {
+            score += 30;
+        }
+        if (amenity.equals("place_of_worship")) {
+            score += 25;
+            if (!religion.isBlank() || !denomination.isBlank()) {
+                score += 15;
+            }
+        }
+
+        // 3. Metadata Completeness & Quality Signals (capped/modest)
+        if (tags.containsKey("official_name")) {
+            score += 10;
+        }
+        if (tags.containsKey("operator")) {
+            score += 10;
+        }
+        if (tags.containsKey("opening_hours")) {
+            score += 10;
+        }
+        if (tags.containsKey("website") || tags.containsKey("contact:website")) {
+            score += 15;
+        }
+
+        // 4. Modest Baseline Category Classification Signal
+        score += 10;
+
         return score;
     }
 
     private String getDescription(PlaceResult p, String city) {
-        String n = p.getName().toLowerCase();
-        if (n.contains("fort")) return "Explore the historical architecture of this majestic fort in " + city;
-        if (n.contains("temple") || n.contains("church") || n.contains("mosque")) return "A spiritual and architectural landmark in the heart of " + city;
-        if (n.contains("park") || n.contains("garden")) return "Relax and enjoy nature in this beautiful green space in " + city;
-        if (n.contains("museum") || n.contains("gallery")) return "Discover the rich history and culture of " + city + " at this museum";
-        if (n.contains("mall") || n.contains("market")) return "A popular shopping and entertainment destination in " + city;
-        if (n.contains("lake") || n.contains("river") || n.contains("peak")) return "Experience the stunning natural beauty of " + city;
-        return "Popular tourist attraction in " + city;
+        String cat = categoryOf(p);
+        switch (cat) {
+            case "HISTORIC":
+                return "Explore the historical architecture and heritage of " + p.getName() + " in " + city;
+            case "RELIGIOUS":
+                return "A spiritual and architectural landmark in " + city;
+            case "SHOPPING":
+                return "A popular shopping and retail destination in " + city;
+            case "WATER":
+                return "Experience the stunning water body and scenic views in " + city;
+            case "NATURE":
+                return "Enjoy the natural scenery and peaks in " + city;
+            case "CULTURAL":
+            case "ENTERTAINMENT":
+                return "Discover arts, culture, and entertainment at " + p.getName() + " in " + city;
+            case "LEISURE":
+                return "Relax and enjoy nature in this beautiful green space in " + city;
+            default:
+                return "Popular attraction in " + city;
+        }
     }
 
     private List<BudgetEstimateDto> generateBudgetEstimates(int days, String destination) {
@@ -364,13 +440,55 @@ public class TripServiceImpl implements TripService {
         return name.toLowerCase().trim();
     }
 
-    private String categoryOf(PlaceResult p) {
-        String n = p.getName().toLowerCase();
-        if (n.contains("hill") || n.contains("lake") || n.contains("peak") || n.contains("waterfall")) return "NATURE";
-        if (n.contains("fort") || n.contains("cave") || n.contains("palace") || n.contains("museum") || n.contains("historical")) return "HISTORIC";
-        if (n.contains("park") || n.contains("garden")) return "PARK";
-        if (n.contains("mall") || n.contains("market")) return "MALL";
-        if (n.contains("temple") || n.contains("church") || n.contains("mosque")) return "RELIGIOUS";
+    public Set<String> getCategories(PlaceResult p) {
+        Set<String> cats = new HashSet<>();
+        Map<String, String> tags = p.getTags() != null ? p.getTags() : Collections.emptyMap();
+        String historic = tags.getOrDefault("historic", "").toLowerCase(Locale.ROOT);
+        String tourism = tags.getOrDefault("tourism", "").toLowerCase(Locale.ROOT);
+        String amenity = tags.getOrDefault("amenity", "").toLowerCase(Locale.ROOT);
+        String shop = tags.getOrDefault("shop", "").toLowerCase(Locale.ROOT);
+        String natural = tags.getOrDefault("natural", "").toLowerCase(Locale.ROOT);
+        String leisure = tags.getOrDefault("leisure", "").toLowerCase(Locale.ROOT);
+
+        if (!historic.isBlank() || tourism.contains("heritage")) {
+            cats.add("HISTORIC");
+        }
+        if (amenity.equals("place_of_worship")) {
+            cats.add("RELIGIOUS");
+        }
+        if (natural.equals("peak") || natural.equals("beach") || natural.equals("cave_entrance") || natural.equals("hot_spring")) {
+            cats.add("NATURE");
+        }
+        if (natural.equals("water") || tags.containsKey("waterway")) {
+            cats.add("WATER");
+        }
+        if (tourism.contains("museum") || tourism.contains("artwork") || tourism.contains("gallery") || amenity.equals("arts_centre") || amenity.equals("theatre")) {
+            cats.add("CULTURE");
+        }
+        if (!shop.isBlank() || shop.equals("mall") || shop.equals("department_store")) {
+            cats.add("SHOPPING");
+        }
+        if (amenity.equals("marketplace")) {
+            cats.add("MARKET");
+        }
+        if (tourism.contains("zoo") || tourism.contains("theme_park") || tourism.contains("attraction") || tourism.contains("viewpoint")) {
+            cats.add("ENTERTAINMENT");
+        }
+        if (leisure.equals("park") || leisure.equals("garden") || leisure.equals("nature_reserve")) {
+            cats.add("LEISURE");
+        }
+
+        if (cats.isEmpty()) {
+            cats.add("LEISURE");
+        }
+        return cats;
+    }
+
+    String categoryOf(PlaceResult p) {
+        Set<String> cats = getCategories(p);
+        if (!cats.isEmpty()) {
+            return cats.iterator().next();
+        }
         return "OTHER";
     }
 
@@ -421,6 +539,7 @@ public class TripServiceImpl implements TripService {
                 .days(t.getDays())
                 .latitude(t.getLatitude())
                 .longitude(t.getLongitude())
+                .placeCategories(t.getPlaceCategories())
                 .dayPlans(
                         plans.stream()
                                 .map(dp -> DayPlanDto.builder()

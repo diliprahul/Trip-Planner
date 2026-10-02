@@ -5,6 +5,7 @@ import lombok.*;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 @Entity
@@ -30,10 +31,27 @@ public class Trip {
     private Double longitude;
 
     // ✅ USER SELECTED CATEGORIES
-    @ElementCollection
+    @Builder.Default
+    @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "trip_categories", joinColumns = @JoinColumn(name = "trip_id"))
     @Column(name = "category")
-    private List<String> categories;
+    private List<String> placeCategories = new ArrayList<>();
+
+    public void setCategories(List<String> categories) {
+        this.placeCategories = categories;
+    }
+
+    public List<String> getCategories() {
+        return placeCategories;
+    }
+
+    public void setPlaceCategories(List<String> placeCategories) {
+        this.placeCategories = placeCategories;
+    }
+
+    public List<String> getPlaceCategories() {
+        return placeCategories != null ? placeCategories : java.util.Collections.emptyList();
+    }
 
     private LocalDateTime createdAt;
 

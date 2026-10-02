@@ -2,6 +2,8 @@ package com.tripplanner.backend;
 
 import com.tripplanner.backend.dto.CreateTripRequest;
 import com.tripplanner.backend.dto.TripDetailResponse;
+import com.tripplanner.backend.entity.Trip;
+import com.tripplanner.backend.repository.TripRepository;
 import com.tripplanner.backend.service.GeocodingService;
 import com.tripplanner.backend.service.TripService;
 import com.tripplanner.backend.util.GeoLocation;
@@ -22,6 +24,9 @@ class TripPlannerBackendApplicationTests {
 
 	@Autowired
 	private TripService tripService;
+
+	@Autowired
+	private TripRepository tripRepository;
 
 	@Test
 	void contextLoads() {
@@ -125,6 +130,94 @@ class TripPlannerBackendApplicationTests {
 		System.out.println("Hotels Count: " + hotelsCount);
 		System.out.println("Weather Count: " + weatherCount);
 		System.out.println("=========================================");
+	}
+
+	@Test
+	void testTripCategoriesPersistenceReligious() {
+		Trip trip = Trip.builder()
+				.origin("Vijayawada")
+				.destination("Hyderabad")
+				.startDate(LocalDate.of(2026, 10, 10))
+				.endDate(LocalDate.of(2026, 10, 12))
+				.days(3)
+				.placeCategories(List.of("RELIGIOUS"))
+				.build();
+
+		Trip saved = tripRepository.save(trip);
+		assertNotNull(saved.getId());
+
+		Trip reloaded = tripRepository.findById(saved.getId()).orElseThrow();
+		assertNotNull(reloaded.getPlaceCategories());
+		assertEquals(1, reloaded.getPlaceCategories().size());
+		assertTrue(reloaded.getPlaceCategories().contains("RELIGIOUS"));
+	}
+
+	@Test
+	void testTripCategoriesPersistenceHistoricReligious() {
+		Trip trip = Trip.builder()
+				.origin("Vijayawada")
+				.destination("Hyderabad")
+				.startDate(LocalDate.of(2026, 10, 10))
+				.endDate(LocalDate.of(2026, 10, 12))
+				.days(3)
+				.placeCategories(List.of("HISTORIC", "RELIGIOUS"))
+				.build();
+
+		Trip saved = tripRepository.save(trip);
+		assertNotNull(saved.getId());
+
+		Trip reloaded = tripRepository.findById(saved.getId()).orElseThrow();
+		assertNotNull(reloaded.getPlaceCategories());
+		assertEquals(2, reloaded.getPlaceCategories().size());
+		assertTrue(reloaded.getPlaceCategories().contains("HISTORIC"));
+		assertTrue(reloaded.getPlaceCategories().contains("RELIGIOUS"));
+	}
+
+	@Test
+	void testTripCategoriesPersistenceEmpty() {
+		Trip trip = Trip.builder()
+				.origin("Vijayawada")
+				.destination("Hyderabad")
+				.startDate(LocalDate.of(2026, 10, 10))
+				.endDate(LocalDate.of(2026, 10, 12))
+				.days(3)
+				.placeCategories(List.of())
+				.build();
+
+		Trip saved = tripRepository.save(trip);
+		assertNotNull(saved.getId());
+
+		Trip reloaded = tripRepository.findById(saved.getId()).orElseThrow();
+		assertNotNull(reloaded.getPlaceCategories());
+		assertTrue(reloaded.getPlaceCategories().isEmpty());
+	}
+
+	@Test
+	void testGenerateItineraryReligiousOnly() {
+		CreateTripRequest request = new CreateTripRequest();
+		request.setOrigin("Vijayawada");
+		request.setDestination("Hyderabad");
+		request.setStartDate(LocalDate.of(2026, 11, 1));
+		request.setEndDate(LocalDate.of(2026, 11, 2)); // 2 days
+		request.setCategories(List.of("RELIGIOUS"));
+
+		TripDetailResponse trip = tripService.createTrip(request);
+		assertNotNull(trip);
+		assertEquals(1, trip.getPlaceCategories().size());
+		assertEquals("RELIGIOUS", trip.getPlaceCategories().get(0));
+
+		TripDetailResponse itinerary = tripService.generateItinerary(trip.getId());
+		assertNotNull(itinerary);
+		assertNotNull(itinerary.getDayPlans());
+
+		System.out.println("=== RELIGIOUS ONLY ITINERARY REPORT ===");
+		System.out.println("Trip ID: " + itinerary.getId());
+		System.out.println("Stored Categories: " + itinerary.getPlaceCategories());
+		System.out.println("Generated Places Count: " + itinerary.getDayPlans().size());
+		for (var plan : itinerary.getDayPlans()) {
+			System.out.println("Place: " + plan.getPlaceName() + " (" + plan.getDescription() + ")");
+		}
+		System.out.println("=======================================");
 	}
 
 }

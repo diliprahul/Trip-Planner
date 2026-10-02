@@ -31,7 +31,7 @@ public class OverpassServiceImpl implements OverpassService {
     public OverpassServiceImpl() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(5_000);
-        factory.setReadTimeout(15_000);
+        factory.setReadTimeout(30_000);
         this.overpassRestTemplate = new RestTemplate(factory);
         this.overpassRestTemplate.getInterceptors().add((request, body, execution) -> {
             request.getHeaders().set("User-Agent", "TripPlanner/1.0 (Overpass Client)");
@@ -46,7 +46,7 @@ public class OverpassServiceImpl implements OverpassService {
 
     @Override
     public List<PlaceResult> getTouristPlaces(double lat, double lon, int minCount) {
-        String key = "places_" + lat + "_" + lon + "_" + minCount;
+        String key = "places_" + lat + "_" + lon;
         CacheEntry entry = cache.get(key);
         if (entry != null && (System.currentTimeMillis() - entry.timestamp() < CACHE_TTL_MS)) {
             return entry.value();
@@ -54,14 +54,17 @@ public class OverpassServiceImpl implements OverpassService {
 
         // Attempt 1: 15km radius
         String query1 = """
-        [out:json][timeout:15];
+        [out:json][timeout:25];
         (
-          nw["tourism"~"attraction|museum|viewpoint|zoo|theme_park"]["name"](around:15000,%f,%f);
-          nw["historic"~"monument|castle|ruins|fort"]["name"](around:15000,%f,%f);
-          nw["leisure"~"park|garden"]["name"](around:15000,%f,%f);
+          nw["tourism"~"attraction|museum|viewpoint|zoo|theme_park|artwork|gallery"]["name"](around:15000,%f,%f);
+          nw["historic"~"monument|castle|ruins|fort|palace|tomb|archaeological_site|heritage"]["name"](around:15000,%f,%f);
+          nw["leisure"~"park|garden|nature_reserve"]["name"](around:15000,%f,%f);
+          nw["amenity"~"place_of_worship|marketplace|arts_centre|theatre"]["name"](around:15000,%f,%f);
+          nw["shop"~"mall|department_store"]["name"](around:15000,%f,%f);
+          nw["natural"~"peak|water|beach|cave_entrance|hot_spring"]["name"](around:15000,%f,%f);
         );
         out center qt;
-        """.formatted(lat, lon, lat, lon, lat, lon);
+        """.formatted(lat, lon, lat, lon, lat, lon, lat, lon, lat, lon, lat, lon);
 
         FetchResult attempt1 = fetch("Places Overpass", query1);
         List<PlaceResult> results = attempt1.results();
@@ -70,14 +73,17 @@ public class OverpassServiceImpl implements OverpassService {
         if (!attempt1.timedOut() && results.size() < minCount) {
             log.info("Initial tourist places count ({}) is less than requested minCount ({}), running fallback wider query (20km)", results.size(), minCount);
             String query2 = """
-            [out:json][timeout:15];
+            [out:json][timeout:25];
             (
-              nw["tourism"~"attraction|museum|viewpoint|zoo|theme_park"]["name"](around:20000,%f,%f);
-              nw["historic"~"monument|castle|ruins|fort"]["name"](around:20000,%f,%f);
-              nw["leisure"~"park|garden"]["name"](around:20000,%f,%f);
+              nw["tourism"~"attraction|museum|viewpoint|zoo|theme_park|artwork|gallery"]["name"](around:20000,%f,%f);
+              nw["historic"~"monument|castle|ruins|fort|palace|tomb|archaeological_site|heritage"]["name"](around:20000,%f,%f);
+              nw["leisure"~"park|garden|nature_reserve"]["name"](around:20000,%f,%f);
+              nw["amenity"~"place_of_worship|marketplace|arts_centre|theatre"]["name"](around:20000,%f,%f);
+              nw["shop"~"mall|department_store"]["name"](around:20000,%f,%f);
+              nw["natural"~"peak|water|beach|cave_entrance|hot_spring"]["name"](around:20000,%f,%f);
             );
             out center qt;
-            """.formatted(lat, lon, lat, lon, lat, lon);
+            """.formatted(lat, lon, lat, lon, lat, lon, lat, lon, lat, lon, lat, lon);
             FetchResult attempt2 = fetch("Places Overpass fallback", query2);
             List<PlaceResult> fallbackResults = attempt2.results();
 

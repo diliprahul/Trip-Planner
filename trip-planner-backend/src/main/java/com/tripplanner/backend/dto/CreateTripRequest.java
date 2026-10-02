@@ -17,5 +17,21 @@ public class CreateTripRequest {
     private LocalDate endDate;
 
     // ✅ MUST EXIST
-    private List<String> categories;
+    private List<String> placeCategories;
+
+    public void setCategories(List<String> categories) {
+        this.placeCategories = categories;
+    }
+
+    public List<String> getCategories() {
+        return placeCategories;
+    }
+
+    public void setPlaceCategories(List<String> placeCategories) {
+        this.placeCategories = placeCategories;
+    }
+
+    public List<String> getPlaceCategories() {
+        return placeCategories != null ? placeCategories : java.util.Collections.emptyList();
+    }
 }

@@ -18,6 +18,7 @@ public class TripDetailResponse {
     private int days;
     private Double latitude;
     private Double longitude;
+    private List<String> placeCategories;
 
     private List<DayPlanDto> dayPlans;
     private List<HotelDto> hotels;
