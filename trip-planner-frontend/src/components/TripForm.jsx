@@ -87,7 +87,7 @@ const TripForm = () => {
     } catch (err) {
       console.error(err);
       setItinerary(null);
-      setError("Itinerary generation failed");
+      setError(err.response?.data?.message || err.message || "Itinerary generation failed");
     } finally {
       setLoading(false);
     }

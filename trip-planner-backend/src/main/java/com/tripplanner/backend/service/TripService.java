@@ -7,11 +7,13 @@ import java.util.List;
 
 public interface TripService {
 
-    TripDetailResponse createTrip(CreateTripRequest request);
+    TripDetailResponse createTrip(CreateTripRequest request, String userEmail);
 
-    TripDetailResponse generateItinerary(Long tripId);
+    TripDetailResponse generateItinerary(Long tripId, String userEmail);
 
-    TripDetailResponse getTripById(Long id);
+    TripDetailResponse getTripById(Long id, String userEmail);
 
-    List<TripDetailResponse> getAllTrips();
+    List<TripDetailResponse> getMyTrips(String userEmail);
+
+    void deleteTrip(Long id, String userEmail);
 }

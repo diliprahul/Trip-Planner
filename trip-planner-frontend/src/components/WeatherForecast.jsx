@@ -25,7 +25,7 @@ const WeatherForecast = ({ weatherResponse }) => {
     <div style={{ marginTop: "32px" }}>
       <h2 style={{ marginBottom: "20px", fontSize: "28px", color: "#0f172a" }}>Daily Weather Forecast</h2>
       {status === "PARTIALLY_AVAILABLE" && (
-        <p style={{ color: "#975a16", marginBottom: "16px", fontSize: "14px" }}>⚠️ {message}</p>
+        <p style={{ color: "#975a16", marginBottom: "16px", fontSize: "14px" }}>{message}</p>
       )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "16px" }}>
         {forecasts.map((day, i) => (

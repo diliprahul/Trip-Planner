@@ -1,12 +1,13 @@
 .trip-form-wrapper {
-  width: 100vw;
-  min-height: 100vh;
+  width: 100%;
+  flex: 1;
+  padding: 40px 20px;
 
   display: flex;
   align-items: center;
   justify-content: center;
 
-  background: linear-gradient(135deg, #eef2ff, #ecfdf5);
+  background: #f8fafc;
 }
 
 .trip-form-card {

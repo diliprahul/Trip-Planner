@@ -23,6 +23,7 @@ import java.util.stream.Collectors;
 public class TripServiceImpl implements TripService {
 
     private final TripRepository tripRepository;
+    private final UserRepository userRepository;
     private final DayPlanRepository dayPlanRepository;
     private final HotelSuggestionRepository hotelSuggestionRepository;
     private final GeocodingService geocodingService;
@@ -31,13 +32,37 @@ public class TripServiceImpl implements TripService {
 
     private static final String CURRENCY = "INR";
 
+    private User resolveUser(String userEmail) {
+        if (userEmail == null || userEmail.isBlank() || "anonymousUser".equals(userEmail)) {
+            throw new RuntimeException("Authentication required");
+        }
+        return userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+    }
+
+    private void validateOwnership(Trip trip, String userEmail) {
+        User user = resolveUser(userEmail);
+        if (trip.getUser() == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND, "Trip not found"
+            );
+        }
+        if (!trip.getUser().getId().equals(user.getId())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Access denied: You do not own this trip"
+            );
+        }
+    }
+
     // =========================================================
     // CREATE TRIP
     // =========================================================
     @Override
-    public TripDetailResponse createTrip(CreateTripRequest request) {
-        log.info("CreateTripRequest: origin={}, destination={}, startDate={}, endDate={}", 
-            request.getOrigin(), request.getDestination(), request.getStartDate(), request.getEndDate());
+    public TripDetailResponse createTrip(CreateTripRequest request, String userEmail) {
+        log.info("CreateTripRequest: origin={}, destination={}, startDate={}, endDate={}, user={}", 
+            request.getOrigin(), request.getDestination(), request.getStartDate(), request.getEndDate(), userEmail);
+
+        User user = resolveUser(userEmail);
 
         if (request.getEndDate() == null || request.getStartDate() == null) {
              throw new RuntimeException("Dates must not be null");
@@ -51,6 +76,7 @@ public class TripServiceImpl implements TripService {
 
         Trip trip = tripRepository.save(
                 Trip.builder()
+                        .user(user)
                         .origin(request.getOrigin())
                         .destination(request.getDestination())
                         .startDate(request.getStartDate())
@@ -60,17 +86,21 @@ public class TripServiceImpl implements TripService {
                         .build()
         );
 
-        return getTripById(trip.getId());
+        return getTripById(trip.getId(), userEmail);
     }
 
     // =========================================================
     // GENERATE ITINERARY
     // =========================================================
     @Override
-    public TripDetailResponse generateItinerary(Long tripId) {
+    public TripDetailResponse generateItinerary(Long tripId, String userEmail) {
 
         Trip trip = tripRepository.findById(tripId)
-                .orElseThrow(() -> new RuntimeException("Trip not found"));
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Trip not found"
+                ));
+
+        validateOwnership(trip, userEmail);
 
         dayPlanRepository.deleteByTrip(trip);
         hotelSuggestionRepository.deleteByTrip(trip);
@@ -94,13 +124,10 @@ public class TripServiceImpl implements TripService {
 
         int days = Math.max(1, trip.getDays());
 
-        // These independent OSM requests are the slow part of generation. Run them together,
-        // while retaining the same real OSM-only data source for both sections.
         long osmStartedAt = System.nanoTime();
         CompletableFuture<List<PlaceResult>> placesFuture = CompletableFuture.supplyAsync(() -> fetchPlacesSafely(trip, days));
         CompletableFuture<List<PlaceResult>> hotelsFuture = CompletableFuture.supplyAsync(() -> fetchHotelsSafely(trip));
 
-        // Use only named OpenStreetMap places, so no generated or generic places appear.
         List<PlaceResult> candidates = selectUsefulPlaces(placesFuture.join(), trip);
         
         List<DayPlan> plans = new ArrayList<>();
@@ -146,17 +173,21 @@ public class TripServiceImpl implements TripService {
 
         hotelSuggestionRepository.saveAll(hotels);
 
-        return getTripById(tripId);
+        return getTripById(tripId, userEmail);
     }
 
     // =========================================================
     // FETCH
     // =========================================================
     @Override
-    public TripDetailResponse getTripById(Long id) {
+    public TripDetailResponse getTripById(Long id, String userEmail) {
 
         Trip trip = tripRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Trip not found"));
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Trip not found"
+                ));
+
+        validateOwnership(trip, userEmail);
 
         return map(
                 trip,
@@ -166,11 +197,28 @@ public class TripServiceImpl implements TripService {
     }
 
     @Override
-    public List<TripDetailResponse> getAllTrips() {
-        return tripRepository.findAll()
+    public List<TripDetailResponse> getMyTrips(String userEmail) {
+        User user = resolveUser(userEmail);
+        return tripRepository.findByUserOrderByCreatedAtDesc(user)
                 .stream()
-                .map(t -> getTripById(t.getId()))
+                .map(t -> map(
+                        t,
+                        dayPlanRepository.findByTripOrderByDayNumberAsc(t),
+                        hotelSuggestionRepository.findByTrip(t)
+                ))
                 .toList();
+    }
+
+    @Override
+    public void deleteTrip(Long id, String userEmail) {
+        Trip trip = tripRepository.findById(id)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "Trip not found"
+                ));
+        validateOwnership(trip, userEmail);
+        dayPlanRepository.deleteByTrip(trip);
+        hotelSuggestionRepository.deleteByTrip(trip);
+        tripRepository.delete(trip);
     }
 
     // =========================================================
@@ -233,7 +281,6 @@ public class TripServiceImpl implements TripService {
         String tourism = tags.get("tourism");
         String name = place.getName() == null ? "" : place.getName().toLowerCase(Locale.ROOT);
 
-        // 1. Explicitly filter out non-accommodation based on name/amenity/shop
         if (name.contains("cafe") || name.contains("restaurant") || name.contains("tiffens") || 
             name.contains("bakery") || name.contains("bar")) {
             return false;
@@ -245,7 +292,6 @@ public class TripServiceImpl implements TripService {
             return false;
         }
 
-        // 2. Reject residential/student/non-tourist accommodations based on name
         if (name.contains("boys") || name.contains("girls") || name.contains("student") || 
             name.contains("students") || name.contains("ladies") || name.contains("women") ||
             name.contains("women's") || name.contains("men") || name.contains("men's") || 
@@ -254,10 +300,8 @@ public class TripServiceImpl implements TripService {
             return false;
         }
 
-        // 3. Filter based on tourism tag
         if (tourism == null) return false;
         
-        // 4. Accept genuine accommodation types including apartment, resort, inn, lodge
         return tourism.contains("hotel") ||
                tourism.contains("guest_house") ||
                tourism.contains("motel") ||
@@ -299,7 +343,6 @@ public class TripServiceImpl implements TripService {
         String religion = tags.getOrDefault("religion", "").toLowerCase(Locale.ROOT);
         String denomination = tags.getOrDefault("denomination", "").toLowerCase(Locale.ROOT);
 
-        // 1. Core Prominence Signals (Wikidata / Wikipedia)
         if (tags.containsKey("wikidata")) {
             score += 100;
         }
@@ -307,7 +350,6 @@ public class TripServiceImpl implements TripService {
             score += 90;
         }
 
-        // 2. Landmark, Heritage & Historic Significance
         if (!heritage.isBlank() || tourism.contains("heritage")) {
             score += 60;
         }
@@ -329,7 +371,6 @@ public class TripServiceImpl implements TripService {
             }
         }
 
-        // 3. Metadata Completeness & Quality Signals (capped/modest)
         if (tags.containsKey("official_name")) {
             score += 10;
         }
@@ -343,7 +384,6 @@ public class TripServiceImpl implements TripService {
             score += 15;
         }
 
-        // 4. Modest Baseline Category Classification Signal
         score += 10;
 
         return score;
@@ -375,14 +415,12 @@ public class TripServiceImpl implements TripService {
     private List<BudgetEstimateDto> generateBudgetEstimates(int days, String destination) {
         List<BudgetEstimateDto> estimates = new ArrayList<>();
         
-        // Simple cost index (relative to Hyderabad/India as 1.0)
         double costMultiplier = 1.0;
         String d = destination.toLowerCase();
         if (d.contains("paris") || d.contains("france")) costMultiplier = 2.5;
         else if (d.contains("new york") || d.contains("usa")) costMultiplier = 3.0;
         else if (d.contains("london") || d.contains("uk")) costMultiplier = 2.0;
 
-        // Budget Tier
         estimates.add(BudgetEstimateDto.builder()
                 .budgetCategory("Budget")
                 .minAccommodation((int)(1000 * days * costMultiplier))
@@ -399,7 +437,6 @@ public class TripServiceImpl implements TripService {
                 .assumptions("Estimated per traveler: basic accommodations, public transport, and local dining (Index: " + costMultiplier + ")")
                 .build());
 
-        // Standard Tier
         estimates.add(BudgetEstimateDto.builder()
                 .budgetCategory("Standard")
                 .minAccommodation((int)(3000 * days * costMultiplier))
@@ -416,7 +453,6 @@ public class TripServiceImpl implements TripService {
                 .assumptions("Estimated per traveler: standard accommodations, local rides, and casual dining (Index: " + costMultiplier + ")")
                 .build());
 
-        // Premium Tier
         estimates.add(BudgetEstimateDto.builder()
                 .budgetCategory("Premium")
                 .minAccommodation((int)(10000 * days * costMultiplier))
@@ -500,9 +536,6 @@ public class TripServiceImpl implements TripService {
                 + (name + " " + city).replace(" ", "+");
     }
 
-    // =========================================================
-    // MAPPER
-    // =========================================================
     private TripDetailResponse map(
             Trip t,
             List<DayPlan> plans,

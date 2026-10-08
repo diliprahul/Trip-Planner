@@ -52,10 +52,10 @@ const Itinerary = () => {
         </h1>
         <div style={{ display: "flex", justifyContent: "center", gap: "12px", fontSize: "16px" }}>
           <span style={{ background: "rgba(255,255,255,0.1)", padding: "6px 16px", borderRadius: "99px" }}>
-            📅 {itinerary.startDate} → {itinerary.endDate}
+            {itinerary.startDate} to {itinerary.endDate}
           </span>
           <span style={{ background: "rgba(255,255,255,0.1)", padding: "6px 16px", borderRadius: "99px" }}>
-            ⏱️ {itinerary.days} Days
+            {itinerary.days} Days
           </span>
         </div>
       </div>
@@ -158,7 +158,7 @@ const Itinerary = () => {
                     e.currentTarget.style.background = "#f1f5f9";
                   }}
                 >
-                  📍 Get Directions
+                  Get Directions
                 </button>
               </div>
             </div>
