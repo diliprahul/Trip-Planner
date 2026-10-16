@@ -1,6 +1,8 @@
-import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { useTrip } from "../context/useTrip";
+import { useAuth } from "../context/useAuth";
+import { getTripById } from "../api/tripApi";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import WeatherForecast from "./WeatherForecast";
@@ -19,14 +21,64 @@ let DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 const Itinerary = () => {
-  const { itinerary } = useTrip();
+  const { itinerary, setItinerary } = useTrip();
+  const { tripId } = useParams();
+  const { loading: authLoading, isAuthenticated } = useAuth();
+  const [fetching, setFetching] = useState(false);
+  const [error, setError] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!itinerary) {
-      navigate("/", { replace: true });
+    if (authLoading) return;
+
+    if (!isAuthenticated) {
+      navigate("/login", { replace: true });
+      return;
     }
-  }, [itinerary, navigate]);
+
+    if (tripId) {
+      if (!itinerary || itinerary.id !== Number(tripId)) {
+        const loadTrip = async () => {
+          setFetching(true);
+          try {
+            const data = await getTripById(tripId);
+            setItinerary(data);
+          } catch (err) {
+            console.error(err);
+            setError(err.response?.data?.message || err.message || "Failed to load trip itinerary");
+          } finally {
+            setFetching(false);
+          }
+        };
+        loadTrip();
+      }
+    } else if (!itinerary) {
+      navigate("/my-trips", { replace: true });
+    }
+  }, [tripId, itinerary, authLoading, isAuthenticated, setItinerary, navigate]);
+
+  if (authLoading || fetching) {
+    return (
+      <div style={{ padding: "100px 24px", textAlign: "center", color: "#64748b", flex: 1 }}>
+        Loading itinerary...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: "100px 24px", textAlign: "center", color: "#dc2626", flex: 1 }}>
+        <h2>Error Loading Itinerary</h2>
+        <p>{error}</p>
+        <button
+          onClick={() => navigate("/my-trips")}
+          style={{ marginTop: "16px", background: "#2563eb", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer" }}
+        >
+          Go to My Trips
+        </button>
+      </div>
+    );
+  }
 
   if (!itinerary) return null;
 
@@ -223,14 +275,14 @@ const Itinerary = () => {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "24px" }}>
           {itinerary.budgetEstimates.map((tier, i) => (
             <div key={i} style={{
-              background: tier.budgetCategory === "Standard" ? "#eff6ff" : "white",
+              background: tier.budgetCategory === "Standard Budget" ? "#eff6ff" : "white",
               padding: "32px",
               borderRadius: "24px",
-              border: tier.budgetCategory === "Standard" ? "2px solid #3b82f6" : "1px solid #e2e8f0",
+              border: tier.budgetCategory === "Standard Budget" ? "2px solid #3b82f6" : "1px solid #e2e8f0",
               boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.1)",
               position: "relative"
             }}>
-              {tier.budgetCategory === "Standard" && (
+              {tier.budgetCategory === "Standard Budget" && (
                 <span style={{
                   position: "absolute",
                   top: "-12px",

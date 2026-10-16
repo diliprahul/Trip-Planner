@@ -11,6 +11,7 @@ import com.tripplanner.backend.repository.HotelSuggestionRepository;
 import com.tripplanner.backend.repository.TripRepository;
 import com.tripplanner.backend.repository.UserRepository;
 import com.tripplanner.backend.service.UserService;
+import com.tripplanner.backend.service.TripService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,10 +56,16 @@ class AuthAndTripSecurityTest {
     private UserService userService;
 
     @Autowired
+    private TripService tripService;
+
+    @Autowired
     private PasswordEncoder passwordEncoder;
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private org.springframework.security.oauth2.client.registration.ClientRegistrationRepository clientRegistrationRepository;
 
     @BeforeEach
     void setUp() {
@@ -268,6 +275,24 @@ class AuthAndTripSecurityTest {
     }
 
     @Test
+    void testGoogleOAuthClientConfigurationDoesNotUseDummyOrUnresolvedPlaceholder() {
+        var googleRegistration = clientRegistrationRepository.findByRegistrationId("google");
+        assertNotNull(googleRegistration);
+
+        String clientId = googleRegistration.getClientId();
+        String clientSecret = googleRegistration.getClientSecret();
+
+        assertNotNull(clientId);
+        assertNotNull(clientSecret);
+
+        assertNotEquals("dummy-client-id", clientId);
+        assertFalse(clientId.contains("${"), "Client ID contains unresolved placeholder: " + clientId);
+
+        assertNotEquals("dummy-client-secret", clientSecret);
+        assertFalse(clientSecret.contains("${"), "Client secret contains unresolved placeholder");
+    }
+
+    @Test
     void testGetCurrentUserWhenUserDeletedReturns401() throws Exception {
         RegisterRequest regReq = new RegisterRequest();
         regReq.setName("Alice");
@@ -298,6 +323,84 @@ class AuthAndTripSecurityTest {
         // GET /api/auth/me should return 401 Unauthorized instead of 500
         mockMvc.perform(get("/api/auth/me")
                         .session(aliceSession))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void testProcessOAuthPostLoginNewUser() {
+        User user = userService.processOAuthPostLogin("GOOGLE", "google-sub-123", "oauthuser@example.com", "OAuth User", true);
+        assertNotNull(user);
+        assertEquals("oauthuser@example.com", user.getEmail());
+        assertEquals("GOOGLE", user.getProvider());
+        assertEquals("google-sub-123", user.getProviderId());
+    }
+
+    @Test
+    void testProcessOAuthPostLoginAccountLinking() {
+        RegisterRequest req = new RegisterRequest();
+        req.setName("Local User");
+        req.setEmail("linkuser@example.com");
+        req.setPassword("password123");
+        userService.register(req);
+
+        User user = userService.processOAuthPostLogin("GOOGLE", "google-sub-456", "linkuser@example.com", "Link User", true);
+        assertNotNull(user);
+        assertEquals("linkuser@example.com", user.getEmail());
+        assertEquals("GOOGLE", user.getProvider());
+        assertEquals("google-sub-456", user.getProviderId());
+    }
+
+    @Test
+    void testProcessOAuthPostLoginUnverifiedEmailThrows() {
+        Exception ex = assertThrows(IllegalArgumentException.class, () -> {
+            userService.processOAuthPostLogin("GOOGLE", "google-sub-789", "unverified@example.com", "Unverified", false);
+        });
+        assertTrue(ex.getMessage().contains("not verified"));
+    }
+
+    @Test
+    void testMyTripsEmptyListAndCaseNormalization() throws Exception {
+        RegisterRequest regReq = new RegisterRequest();
+        regReq.setName("Empty User");
+        regReq.setEmail("emptyuser@example.com");
+        regReq.setPassword("password123");
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(regReq)))
+                .andExpect(status().isOk());
+
+        LoginRequest loginReq = new LoginRequest();
+        loginReq.setEmail("emptyuser@example.com");
+        loginReq.setPassword("password123");
+
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(loginReq)))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        MockHttpSession session = (MockHttpSession) loginResult.getRequest().getSession();
+        assertNotNull(session);
+
+        // GET /api/trips/my with 0 trips should return 200 OK and empty list []
+        mockMvc.perform(get("/api/trips/my")
+                        .session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(0)));
+
+        // Test direct service call with mixed case and spacing in email
+        var myTrips = tripService.getMyTrips("  EMPTYUSER@EXAMPLE.COM  ");
+        assertNotNull(myTrips);
+        assertTrue(myTrips.isEmpty());
+    }
+
+    @Test
+    void testOAuthLoginSessionPersistenceAndAuthMe() throws Exception {
+        User user = userService.processOAuthPostLogin("GOOGLE", "google-sub-oauth-test", "oauthsession@example.com", "OAuth Session User", true);
+        assertNotNull(user);
+
+        mockMvc.perform(get("/api/auth/me"))
                 .andExpect(status().isUnauthorized());
     }
 }

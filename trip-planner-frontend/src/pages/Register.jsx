@@ -3,7 +3,14 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/useAuth";
 
 const Register = () => {
-  const [formData, setFormData] = useState({ name: "", email: "", password: "", confirmPassword: "" });
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+    cityOfResidence: "",
+    favouritePlace: "",
+  });
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const { register, isAuthenticated } = useAuth();
@@ -41,6 +48,8 @@ const Register = () => {
         name: formData.name,
         email: formData.email,
         password: formData.password,
+        cityOfResidence: formData.cityOfResidence,
+        favouritePlace: formData.favouritePlace,
       });
       navigate("/");
     } catch (err) {
@@ -81,6 +90,30 @@ const Register = () => {
               onChange={handleChange}
               autoComplete="email"
               required
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Current City (Optional)</label>
+            <input
+              type="text"
+              name="cityOfResidence"
+              placeholder="e.g. New York"
+              value={formData.cityOfResidence}
+              onChange={handleChange}
+              maxLength={100}
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Favourite Place or City (Optional)</label>
+            <input
+              type="text"
+              name="favouritePlace"
+              placeholder="e.g. Paris"
+              value={formData.favouritePlace}
+              onChange={handleChange}
+              maxLength={100}
             />
           </div>
 

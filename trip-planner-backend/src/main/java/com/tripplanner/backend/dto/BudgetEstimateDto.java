@@ -8,7 +8,7 @@ import lombok.Setter;
 @Setter
 @Builder
 public class BudgetEstimateDto {
-    private String budgetCategory; // "Budget", "Standard", "Premium"
+    private String budgetCategory; // "Low Budget", "Standard Budget", "Premium Budget"
     
     private double minAccommodation;
     private double maxAccommodation;

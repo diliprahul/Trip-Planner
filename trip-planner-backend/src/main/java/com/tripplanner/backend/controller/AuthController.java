@@ -1,9 +1,8 @@
 package com.tripplanner.backend.controller;
 
-import com.tripplanner.backend.dto.AuthResponse;
-import com.tripplanner.backend.dto.LoginRequest;
-import com.tripplanner.backend.dto.RegisterRequest;
+import com.tripplanner.backend.dto.*;
 import com.tripplanner.backend.entity.User;
+import com.tripplanner.backend.service.PasswordResetService;
 import com.tripplanner.backend.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -17,6 +16,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
@@ -25,6 +26,7 @@ public class AuthController {
 
     private final UserService userService;
     private final AuthenticationManager authenticationManager;
+    private final PasswordResetService passwordResetService;
 
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@RequestBody RegisterRequest request) {
@@ -47,6 +49,31 @@ public class AuthController {
 
         User user = userService.findByEmail(request.getEmail());
         return ResponseEntity.ok(userService.toAuthResponse(user));
+    }
+
+    @PostMapping("/forgot-password")
+    public ResponseEntity<Map<String, String>> forgotPassword(@RequestBody ForgotPasswordRequest request) {
+        passwordResetService.requestPasswordReset(request.getEmail());
+        return ResponseEntity.ok(Map.of("message", "If an account with that email exists, a password reset OTP has been sent."));
+    }
+
+    @PostMapping("/verify-reset-otp")
+    public ResponseEntity<Map<String, Object>> verifyResetOtp(@RequestBody VerifyResetOtpRequest request) {
+        boolean valid = passwordResetService.verifyResetOtp(request.getEmail(), request.getOtp());
+        if (!valid) {
+            return ResponseEntity.badRequest().body(Map.of("valid", false, "message", "Invalid or expired OTP"));
+        }
+        return ResponseEntity.ok(Map.of("valid", true, "message", "OTP verified successfully"));
+    }
+
+    @PostMapping("/reset-password")
+    public ResponseEntity<Map<String, String>> resetPassword(@RequestBody ResetPasswordRequest request) {
+        try {
+            passwordResetService.resetPassword(request.getEmail(), request.getOtp(), request.getNewPassword());
+            return ResponseEntity.ok(Map.of("message", "Password reset successfully. You can now sign in with your new password."));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
     }
 
     @GetMapping("/me")

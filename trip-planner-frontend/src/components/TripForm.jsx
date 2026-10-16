@@ -83,7 +83,7 @@ const TripForm = () => {
 
       const itinerary = await generateItinerary(createdTrip.id);
       setItinerary(itinerary);
-      navigate("/result");
+      navigate(`/result/${createdTrip.id}`);
     } catch (err) {
       console.error(err);
       setItinerary(null);

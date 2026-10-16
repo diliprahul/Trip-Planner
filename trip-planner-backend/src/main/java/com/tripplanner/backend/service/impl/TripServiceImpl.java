@@ -34,10 +34,15 @@ public class TripServiceImpl implements TripService {
 
     private User resolveUser(String userEmail) {
         if (userEmail == null || userEmail.isBlank() || "anonymousUser".equals(userEmail)) {
-            throw new RuntimeException("Authentication required");
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.UNAUTHORIZED, "Authentication required"
+            );
         }
-        return userRepository.findByEmail(userEmail)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+        String normalizedEmail = userEmail.trim().toLowerCase();
+        return userRepository.findByEmail(normalizedEmail)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "User not found"
+                ));
     }
 
     private void validateOwnership(Trip trip, String userEmail) {
@@ -59,7 +64,7 @@ public class TripServiceImpl implements TripService {
     // =========================================================
     @Override
     public TripDetailResponse createTrip(CreateTripRequest request, String userEmail) {
-        log.info("CreateTripRequest: origin={}, destination={}, startDate={}, endDate={}, user={}", 
+        log.info("CreateTripRequest: origin={}, destination={}, startDate={}, endDate={}, user={}",
             request.getOrigin(), request.getDestination(), request.getStartDate(), request.getEndDate(), userEmail);
 
         User user = resolveUser(userEmail);
@@ -71,6 +76,7 @@ public class TripServiceImpl implements TripService {
         if (request.getEndDate().isBefore(request.getStartDate())) {
             throw new RuntimeException("End date cannot be before start date");
         }
+
 
         long days = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) + 1;
 
@@ -129,7 +135,7 @@ public class TripServiceImpl implements TripService {
         CompletableFuture<List<PlaceResult>> hotelsFuture = CompletableFuture.supplyAsync(() -> fetchHotelsSafely(trip));
 
         List<PlaceResult> candidates = selectUsefulPlaces(placesFuture.join(), trip);
-        
+
         List<DayPlan> plans = new ArrayList<>();
         for (int i = 0; i < Math.min(days, candidates.size()); i++) {
             PlaceResult place = candidates.get(i);
@@ -199,8 +205,12 @@ public class TripServiceImpl implements TripService {
     @Override
     public List<TripDetailResponse> getMyTrips(String userEmail) {
         User user = resolveUser(userEmail);
-        return tripRepository.findByUserOrderByCreatedAtDesc(user)
-                .stream()
+        List<Trip> trips = tripRepository.findByUserOrderByCreatedAtDesc(user);
+        if (trips == null || trips.isEmpty()) {
+            return List.of();
+        }
+        return trips.stream()
+                .filter(t -> t != null)
                 .map(t -> map(
                         t,
                         dayPlanRepository.findByTripOrderByDayNumberAsc(t),
@@ -276,32 +286,32 @@ public class TripServiceImpl implements TripService {
 
     private boolean isAccommodation(PlaceResult place) {
         if (place.getTags() == null) return false;
-        
+
         Map<String, String> tags = place.getTags();
         String tourism = tags.get("tourism");
         String name = place.getName() == null ? "" : place.getName().toLowerCase(Locale.ROOT);
 
-        if (name.contains("cafe") || name.contains("restaurant") || name.contains("tiffens") || 
+        if (name.contains("cafe") || name.contains("restaurant") || name.contains("tiffens") ||
             name.contains("bakery") || name.contains("bar")) {
             return false;
         }
 
-        if (tags.containsKey("shop") || 
-            (tags.containsKey("amenity") && (tags.get("amenity").contains("restaurant") || 
+        if (tags.containsKey("shop") ||
+            (tags.containsKey("amenity") && (tags.get("amenity").contains("restaurant") ||
              tags.get("amenity").contains("cafe") || tags.get("amenity").contains("fast_food")))) {
             return false;
         }
 
-        if (name.contains("boys") || name.contains("girls") || name.contains("student") || 
+        if (name.contains("boys") || name.contains("girls") || name.contains("student") ||
             name.contains("students") || name.contains("ladies") || name.contains("women") ||
-            name.contains("women's") || name.contains("men") || name.contains("men's") || 
-            name.contains("working") || name.contains("workers") || name.contains("pg") || 
+            name.contains("women's") || name.contains("men") || name.contains("men's") ||
+            name.contains("working") || name.contains("workers") || name.contains("pg") ||
             name.contains("paying guest") || name.contains("residential")) {
             return false;
         }
 
         if (tourism == null) return false;
-        
+
         return tourism.contains("hotel") ||
                tourism.contains("guest_house") ||
                tourism.contains("motel") ||
@@ -334,7 +344,7 @@ public class TripServiceImpl implements TripService {
     int getRelevanceScore(PlaceResult p) {
         int score = 0;
         Map<String, String> tags = p.getTags() != null ? p.getTags() : Collections.emptyMap();
-        
+
         String historic = tags.getOrDefault("historic", "").toLowerCase(Locale.ROOT);
         String tourism = tags.getOrDefault("tourism", "").toLowerCase(Locale.ROOT);
         String amenity = tags.getOrDefault("amenity", "").toLowerCase(Locale.ROOT);
@@ -414,7 +424,7 @@ public class TripServiceImpl implements TripService {
 
     private List<BudgetEstimateDto> generateBudgetEstimates(int days, String destination) {
         List<BudgetEstimateDto> estimates = new ArrayList<>();
-        
+
         double costMultiplier = 1.0;
         String d = destination.toLowerCase();
         if (d.contains("paris") || d.contains("france")) costMultiplier = 2.5;
@@ -422,7 +432,7 @@ public class TripServiceImpl implements TripService {
         else if (d.contains("london") || d.contains("uk")) costMultiplier = 2.0;
 
         estimates.add(BudgetEstimateDto.builder()
-                .budgetCategory("Budget")
+                .budgetCategory("Low Budget")
                 .minAccommodation((int)(1000 * days * costMultiplier))
                 .maxAccommodation((int)(2500 * days * costMultiplier))
                 .minTransport((int)(200 * days * costMultiplier))
@@ -438,7 +448,7 @@ public class TripServiceImpl implements TripService {
                 .build());
 
         estimates.add(BudgetEstimateDto.builder()
-                .budgetCategory("Standard")
+                .budgetCategory("Standard Budget")
                 .minAccommodation((int)(3000 * days * costMultiplier))
                 .maxAccommodation((int)(7000 * days * costMultiplier))
                 .minTransport((int)(1000 * days * costMultiplier))
@@ -454,7 +464,7 @@ public class TripServiceImpl implements TripService {
                 .build());
 
         estimates.add(BudgetEstimateDto.builder()
-                .budgetCategory("Premium")
+                .budgetCategory("Premium Budget")
                 .minAccommodation((int)(10000 * days * costMultiplier))
                 .maxAccommodation((int)(30000 * days * costMultiplier))
                 .minTransport((int)(3000 * days * costMultiplier))

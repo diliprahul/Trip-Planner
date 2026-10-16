@@ -15,5 +15,11 @@ public class AuthResponse {
     private Long id;
     private String name;
     private String email;
+    private String provider;
     private LocalDateTime createdAt;
+    private String customPicture;
+    private String googlePictureUrl;
+    private String profilePictureUrl;
+    private String cityOfResidence;
+    private String favouritePlace;
 }

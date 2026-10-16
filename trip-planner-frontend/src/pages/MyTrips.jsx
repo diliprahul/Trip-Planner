@@ -36,7 +36,7 @@ const MyTrips = () => {
 
   const handleOpenTrip = (trip) => {
     setItinerary(trip);
-    navigate("/result");
+    navigate(`/result/${trip.id}`);
   };
 
   const handleDeleteTrip = async (e, tripId) => {

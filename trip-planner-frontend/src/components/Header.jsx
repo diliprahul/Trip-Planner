@@ -1,23 +1,42 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/useAuth";
 
 const Header = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
   const { isAuthenticated, logout, user } = useAuth();
 
   const isActive = (path) => location.pathname === path;
 
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const handleLogout = async () => {
     try {
+      setDropdownOpen(false);
+      setMobileMenuOpen(false);
       await logout();
       navigate("/login");
-      setMobileMenuOpen(false);
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const handleViewProfile = () => {
+    setDropdownOpen(false);
+    setMobileMenuOpen(false);
+    navigate("/profile");
   };
 
   return (
@@ -84,13 +103,49 @@ const Header = () => {
               </Link>
             </>
           ) : (
-            <button
-              onClick={handleLogout}
-              className="nav-link"
-              style={{ background: "transparent", border: "none", cursor: "pointer", padding: 0, font: "inherit", color: "#64748b" }}
-            >
-              Logout ({user?.name || "User"})
-            </button>
+            <div className="user-menu-wrapper" ref={dropdownRef}>
+              <button
+                onClick={() => setDropdownOpen(!dropdownOpen)}
+                className="user-menu-button"
+                aria-expanded={dropdownOpen}
+                aria-label="User menu"
+              >
+                <div className="user-avatar">
+                  {user?.profilePictureUrl ? (
+                    <img src={user.profilePictureUrl} alt={user?.name || "User"} />
+                  ) : (
+                    <span>{user?.name ? user.name.charAt(0).toUpperCase() : "U"}</span>
+                  )}
+                </div>
+                <span className="user-name">{user?.name || "User"}</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="user-chevron">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
+
+              {dropdownOpen && (
+                <div className="user-dropdown-menu">
+                  <div className="user-dropdown-header">
+                    <div className="user-dropdown-name">{user?.name || "User"}</div>
+                    {user?.email && (
+                      <div className="user-dropdown-email">{user.email}</div>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleViewProfile}
+                    className="user-dropdown-item"
+                  >
+                    View Profile
+                  </button>
+                  <button
+                    onClick={handleLogout}
+                    className="user-dropdown-item logout-item"
+                  >
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </nav>
 

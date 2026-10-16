@@ -19,6 +19,13 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.springframework.boot.test.mock.mockito.MockBean;
+import com.tripplanner.backend.service.OverpassService;
+import com.tripplanner.backend.util.PlaceResult;
+import java.util.Map;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.when;
+
 @SpringBootTest
 class TripPlannerBackendApplicationTests {
 
@@ -34,10 +41,56 @@ class TripPlannerBackendApplicationTests {
 	@Autowired
 	private UserService userService;
 
+	@MockBean
+	private OverpassService overpassService;
+
 	private final String testEmail = "test@example.com";
 
 	@BeforeEach
 	void setUpUser() {
+		var mockPlaces = List.of(
+				PlaceResult.builder()
+						.name("Charminar")
+						.latitude(17.3616)
+						.longitude(78.4747)
+						.tags(Map.of("historic", "monument", "wikidata", "Q12345", "wikipedia", "en:Charminar"))
+						.build(),
+				PlaceResult.builder()
+						.name("Golconda Fort")
+						.latitude(17.3833)
+						.longitude(78.4011)
+						.tags(Map.of("historic", "fort", "wikidata", "Q23456", "wikipedia", "en:Golconda_Fort"))
+						.build(),
+				PlaceResult.builder()
+						.name("Birla Mandir")
+						.latitude(17.4062)
+						.longitude(78.4695)
+						.tags(Map.of("amenity", "place_of_worship", "wikidata", "Q34567", "wikipedia", "en:Birla_Mandir"))
+						.build()
+		);
+
+		var mockHotels = List.of(
+				PlaceResult.builder()
+						.name("Taj Falaknuma Palace")
+						.latitude(17.3330)
+						.longitude(78.4790)
+						.tags(Map.of("tourism", "hotel"))
+						.build(),
+				PlaceResult.builder()
+						.name("ITC Kohenur")
+						.latitude(17.4435)
+						.longitude(78.3772)
+						.tags(Map.of("tourism", "hotel"))
+						.build()
+		);
+
+		when(overpassService.getTouristPlaces(anyDouble(), anyDouble()))
+				.thenReturn(mockPlaces);
+		when(overpassService.getTouristPlaces(anyDouble(), anyDouble(), anyInt()))
+				.thenReturn(mockPlaces);
+		when(overpassService.getHotels(anyDouble(), anyDouble()))
+				.thenReturn(mockHotels);
+
 		try {
 			RegisterRequest reg = new RegisterRequest();
 			reg.setName("Test User");

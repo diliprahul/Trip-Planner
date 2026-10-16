@@ -7,6 +7,7 @@ import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import MyTrips from "./pages/MyTrips";
+import Profile from "./pages/Profile";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
 import { TripProvider } from "./context/TripContext";
@@ -42,7 +43,9 @@ function App() {
               <Routes>
                 <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
                 <Route path="/result" element={<ProtectedRoute><Result /></ProtectedRoute>} />
+                <Route path="/result/:tripId" element={<ProtectedRoute><Result /></ProtectedRoute>} />
                 <Route path="/my-trips" element={<ProtectedRoute><MyTrips /></ProtectedRoute>} />
+                <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
                 <Route path="/login" element={<Login />} />
                 <Route path="/register" element={<Register />} />
                 <Route path="/privacy-policy" element={<PrivacyPolicy />} />
