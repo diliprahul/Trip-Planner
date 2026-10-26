@@ -16,9 +16,24 @@ const Profile = () => {
   const [success, setSuccess] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [imgError, setImgError] = useState(false);
 
   const { isAuthenticated, fetchCurrentUser } = useAuth();
   const navigate = useNavigate();
+
+  const effectiveAvatar = previewUrl || profile?.profilePictureUrl;
+
+  useEffect(() => {
+    setImgError(false);
+  }, [effectiveAvatar]);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
 
   useEffect(() => {
     document.title = "User Profile | TripPlanner";
@@ -160,8 +175,6 @@ const Profile = () => {
     );
   }
 
-  const effectiveAvatar = previewUrl || profile?.profilePictureUrl;
-
   return (
     <div style={{ maxWidth: "650px", margin: "24px auto", padding: "0 16px", width: "100%", flex: 1 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", gap: "12px", flexWrap: "wrap" }}>
@@ -206,8 +219,8 @@ const Profile = () => {
         {/* Profile Picture Section */}
         <div style={{ display: "flex", alignItems: "center", gap: "20px", marginBottom: "24px", paddingBottom: "20px", borderBottom: "1px solid #e2e8f0" }}>
           <div style={{ position: "relative", width: "80px", height: "80px", borderRadius: "50%", overflow: "hidden", background: "#e2e8f0", display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #cbd5e1", flexShrink: 0 }}>
-            {effectiveAvatar ? (
-              <img src={effectiveAvatar} alt="Profile" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            {effectiveAvatar && !imgError ? (
+              <img src={effectiveAvatar} alt="Profile" onError={() => setImgError(true)} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             ) : (
               <span style={{ fontSize: "30px", fontWeight: "700", color: "#64748b" }}>
                 {profile?.name ? profile.name.charAt(0).toUpperCase() : "U"}

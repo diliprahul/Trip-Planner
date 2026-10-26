@@ -5,12 +5,17 @@ import { useAuth } from "../context/useAuth";
 const Header = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [imgError, setImgError] = useState(false);
   const dropdownRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
   const { isAuthenticated, logout, user } = useAuth();
 
   const isActive = (path) => location.pathname === path;
+
+  useEffect(() => {
+    setImgError(false);
+  }, [user?.profilePictureUrl]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -111,8 +116,8 @@ const Header = () => {
                 aria-label="User menu"
               >
                 <div className="user-avatar">
-                  {user?.profilePictureUrl ? (
-                    <img src={user.profilePictureUrl} alt={user?.name || "User"} />
+                  {user?.profilePictureUrl && !imgError ? (
+                    <img src={user.profilePictureUrl} alt={user?.name || "User"} onError={() => setImgError(true)} />
                   ) : (
                     <span>{user?.name ? user.name.charAt(0).toUpperCase() : "U"}</span>
                   )}

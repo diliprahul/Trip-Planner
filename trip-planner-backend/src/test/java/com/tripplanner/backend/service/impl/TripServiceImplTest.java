@@ -5,6 +5,7 @@ import com.tripplanner.backend.repository.HotelSuggestionRepository;
 import com.tripplanner.backend.repository.TripRepository;
 import com.tripplanner.backend.repository.UserRepository;
 import com.tripplanner.backend.service.GeocodingService;
+import com.tripplanner.backend.service.GeminiService;
 import com.tripplanner.backend.service.OverpassService;
 import com.tripplanner.backend.service.WeatherService;
 import com.tripplanner.backend.util.PlaceResult;
@@ -29,8 +30,9 @@ class TripServiceImplTest {
         GeocodingService geoService = Mockito.mock(GeocodingService.class);
         OverpassService overpassService = Mockito.mock(OverpassService.class);
         WeatherService weatherService = Mockito.mock(WeatherService.class);
+        GeminiService geminiService = Mockito.mock(GeminiService.class);
 
-        tripService = new TripServiceImpl(tripRepo, userRepo, dayRepo, hotelRepo, geoService, overpassService, weatherService);
+        tripService = new TripServiceImpl(tripRepo, userRepo, dayRepo, hotelRepo, geoService, overpassService, weatherService, geminiService);
     }
 
     @Test

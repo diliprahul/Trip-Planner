@@ -29,6 +29,7 @@ public class TripServiceImpl implements TripService {
     private final GeocodingService geocodingService;
     private final OverpassService overpassService;
     private final WeatherService weatherService;
+    private final GeminiService geminiService;
 
     private static final String CURRENCY = "INR";
 
@@ -80,6 +81,10 @@ public class TripServiceImpl implements TripService {
 
         long days = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) + 1;
 
+        List<String> categories = request.getPlaceCategories() != null
+                ? new ArrayList<>(request.getPlaceCategories())
+                : new ArrayList<>();
+
         Trip trip = tripRepository.save(
                 Trip.builder()
                         .user(user)
@@ -88,11 +93,11 @@ public class TripServiceImpl implements TripService {
                         .startDate(request.getStartDate())
                         .endDate(request.getEndDate())
                         .days((int) days)
-                        .placeCategories(request.getPlaceCategories())
+                        .placeCategories(categories)
                         .build()
         );
 
-        return getTripById(trip.getId(), userEmail);
+        return map(trip, List.of(), List.of());
     }
 
     // =========================================================
@@ -120,7 +125,10 @@ public class TripServiceImpl implements TripService {
             }
 
             if (!isUsableLocation(loc)) {
-                throw new RuntimeException("Unable to find a map location for the destination");
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.BAD_REQUEST,
+                        "Could not geocode destination: " + trip.getDestination()
+                );
             }
 
             trip.setLatitude(loc.getLatitude());
@@ -128,7 +136,7 @@ public class TripServiceImpl implements TripService {
             tripRepository.save(trip);
         }
 
-        int days = Math.max(1, trip.getDays());
+        int days = Math.max(1, Optional.ofNullable(trip.getDays()).orElse(1));
 
         long osmStartedAt = System.nanoTime();
         CompletableFuture<List<PlaceResult>> placesFuture = CompletableFuture.supplyAsync(() -> fetchPlacesSafely(trip, days));
@@ -136,19 +144,48 @@ public class TripServiceImpl implements TripService {
 
         List<PlaceResult> candidates = selectUsefulPlaces(placesFuture.join(), trip);
 
+        if (candidates.isEmpty()) {
+            log.info("Overpass returned no valid places for destination: {}. Attempting Gemini AI fallback...", trip.getDestination());
+            try {
+                List<Map<String, String>> geminiPlaces = geminiService.generateItinerary(trip.getDestination(), days);
+                if (geminiPlaces != null && !geminiPlaces.isEmpty()) {
+                    candidates = geminiPlaces.stream()
+                            .filter(Objects::nonNull)
+                            .map(gp -> {
+                                GeoLocation placeLocation = geocodePlace(gp.get("name"), trip.getDestination());
+                                return PlaceResult.builder()
+                                        .name(gp.get("name"))
+                                        .address(trip.getDestination())
+                                        .latitude(placeLocation != null ? placeLocation.getLatitude() : null)
+                                        .longitude(placeLocation != null ? placeLocation.getLongitude() : null)
+                                        .tags(Map.of("description", gp.getOrDefault("description", "Popular attraction")))
+                                        .build();
+                            })
+                            .filter(p -> p.getName() != null && !p.getName().isBlank())
+                            .toList();
+                    log.info("Gemini fallback provided {} attractions for {}", candidates.size(), trip.getDestination());
+                }
+            } catch (Exception e) {
+                log.warn("Gemini fallback generation failed for {}: {}", trip.getDestination(), e.getMessage());
+            }
+        }
+
         List<DayPlan> plans = new ArrayList<>();
         for (int i = 0; i < Math.min(days, candidates.size()); i++) {
             PlaceResult place = candidates.get(i);
+            String desc = place.getTags() != null && place.getTags().containsKey("description")
+                    ? place.getTags().get("description")
+                    : getDescription(place, trip.getDestination());
             plans.add(DayPlan.builder()
                     .trip(trip)
                     .dayNumber(i + 1)
                     .placeName(place.getName())
-                    .description(getDescription(place, trip.getDestination()))
+                    .description(desc)
                     .latitude(place.getLatitude())
                     .longitude(place.getLongitude())
                     .build());
         }
-        if (plans.isEmpty()) log.warn("No named tourist places were returned for {}", trip.getDestination());
+        if (plans.isEmpty()) log.warn("No named tourist places or fallback suggestions were returned for {}", trip.getDestination());
 
         dayPlanRepository.saveAll(plans);
 
@@ -177,6 +214,26 @@ public class TripServiceImpl implements TripService {
                         )
                         .toList();
 
+        if (hotels.isEmpty()) {
+            try {
+                hotels = Optional.ofNullable(geminiService.generateHotels(trip.getDestination(), 5))
+                        .orElse(List.of())
+                        .stream()
+                        .filter(Objects::nonNull)
+                        .filter(hotel -> hotel.get("name") != null && !hotel.get("name").isBlank())
+                        .map(hotel -> HotelSuggestion.builder()
+                                .trip(trip)
+                                .name(hotel.get("name").trim())
+                                .address(hotel.getOrDefault("address", trip.getDestination()))
+                                .latitude(trip.getLatitude())
+                                .longitude(trip.getLongitude())
+                                .build())
+                        .toList();
+            } catch (Exception e) {
+                log.warn("Gemini hotel fallback failed for {}: {}", trip.getDestination(), e.getMessage());
+            }
+        }
+
         hotelSuggestionRepository.saveAll(hotels);
 
         return getTripById(tripId, userEmail);
@@ -195,9 +252,10 @@ public class TripServiceImpl implements TripService {
 
         validateOwnership(trip, userEmail);
 
+        List<DayPlan> plans = dayPlanRepository.findByTripOrderByDayNumberAsc(trip);
         return map(
                 trip,
-                dayPlanRepository.findByTripOrderByDayNumberAsc(trip),
+                plans,
                 hotelSuggestionRepository.findByTrip(trip)
         );
     }
@@ -289,16 +347,11 @@ public class TripServiceImpl implements TripService {
 
         Map<String, String> tags = place.getTags();
         String tourism = tags.get("tourism");
+        String amenity = tags.get("amenity");
+        String building = tags.get("building");
         String name = place.getName() == null ? "" : place.getName().toLowerCase(Locale.ROOT);
 
-        if (name.contains("cafe") || name.contains("restaurant") || name.contains("tiffens") ||
-            name.contains("bakery") || name.contains("bar")) {
-            return false;
-        }
-
-        if (tags.containsKey("shop") ||
-            (tags.containsKey("amenity") && (tags.get("amenity").contains("restaurant") ||
-             tags.get("amenity").contains("cafe") || tags.get("amenity").contains("fast_food")))) {
+        if (tags.containsKey("shop")) {
             return false;
         }
 
@@ -310,7 +363,13 @@ public class TripServiceImpl implements TripService {
             return false;
         }
 
-        if (tourism == null) return false;
+        if ("hotel".equals(amenity) || "hotel".equals(building) || "yes".equals(tags.get("hotel"))) {
+            return true;
+        }
+
+        if (tourism == null) {
+            return name.contains("hotel") || name.contains("resort") || name.contains("inn") || name.contains("lodge") || name.contains("guest house") || name.contains("hostel") || name.contains("motel");
+        }
 
         return tourism.contains("hotel") ||
                tourism.contains("guest_house") ||
@@ -319,12 +378,34 @@ public class TripServiceImpl implements TripService {
                tourism.contains("apartment") ||
                tourism.contains("resort") ||
                tourism.contains("inn") ||
-               tourism.contains("lodge");
+               tourism.contains("lodge") ||
+               tourism.contains("chalet") ||
+               tourism.contains("alpine_hut") ||
+               tourism.contains("wilderness_hut") ||
+               "yes".equals(tourism);
     }
 
     private boolean isUsableLocation(GeoLocation location) {
         return location != null && location.getLatitude() != null && location.getLongitude() != null
                 && !(location.getLatitude() == 0.0 && location.getLongitude() == 0.0);
+    }
+
+    private GeoLocation geocodePlace(String placeName, String destination) {
+        if (placeName == null || placeName.isBlank() || destination == null || destination.isBlank()) {
+            return null;
+        }
+        try {
+            GeoLocation location = geocodingService.geocodeCity(placeName + ", " + destination);
+            if (isUsableLocation(location)) {
+                return location;
+            }
+        } catch (Exception e) {
+            log.warn("Could not geocode generated attraction '{}' in {}: {}", placeName, destination,
+                    e.getClass().getSimpleName());
+            return null;
+        }
+        log.warn("Could not geocode generated attraction '{}' in {}", placeName, destination);
+        return null;
     }
 
     private double distanceSquared(Trip trip, PlaceResult place) {
@@ -495,36 +576,39 @@ public class TripServiceImpl implements TripService {
         String shop = tags.getOrDefault("shop", "").toLowerCase(Locale.ROOT);
         String natural = tags.getOrDefault("natural", "").toLowerCase(Locale.ROOT);
         String leisure = tags.getOrDefault("leisure", "").toLowerCase(Locale.ROOT);
+        String name = p.getName() != null ? p.getName().toLowerCase(Locale.ROOT) : "";
 
-        if (!historic.isBlank() || tourism.contains("heritage")) {
+        if (!historic.isBlank() || tourism.contains("heritage") || name.contains("fort") || name.contains("palace") || name.contains("monument") || name.contains("tomb") || name.contains("castle") || name.contains("ruins")) {
             cats.add("HISTORIC");
         }
-        if (amenity.equals("place_of_worship")) {
+        if (amenity.equals("place_of_worship") || name.contains("temple") || name.contains("church") || name.contains("mosque") || name.contains("gurudwara") || name.contains("shrine") || name.contains("cathedral")) {
             cats.add("RELIGIOUS");
         }
-        if (natural.equals("peak") || natural.equals("beach") || natural.equals("cave_entrance") || natural.equals("hot_spring")) {
+        if (natural.equals("peak") || natural.equals("beach") || natural.equals("cave_entrance") || natural.equals("hot_spring") || name.contains("hill") || name.contains("mountain") || name.contains("valley")) {
             cats.add("NATURE");
         }
-        if (natural.equals("water") || tags.containsKey("waterway")) {
+        if (natural.equals("water") || tags.containsKey("waterway") || name.contains("lake") || name.contains("river") || name.contains("waterfall") || name.contains("dam") || name.contains("reservoir")) {
             cats.add("WATER");
         }
-        if (tourism.contains("museum") || tourism.contains("artwork") || tourism.contains("gallery") || amenity.equals("arts_centre") || amenity.equals("theatre")) {
+        if (tourism.contains("museum") || tourism.contains("artwork") || tourism.contains("gallery") || amenity.equals("arts_centre") || amenity.equals("theatre") || name.contains("museum") || name.contains("gallery") || name.contains("art")) {
             cats.add("CULTURE");
         }
-        if (!shop.isBlank() || shop.equals("mall") || shop.equals("department_store")) {
+        if (!shop.isBlank() || shop.equals("mall") || shop.equals("department_store") || name.contains("mall") || name.contains("shopping")) {
             cats.add("SHOPPING");
         }
-        if (amenity.equals("marketplace")) {
+        if (amenity.equals("marketplace") || name.contains("market") || name.contains("bazaar")) {
             cats.add("MARKET");
         }
         if (tourism.contains("zoo") || tourism.contains("theme_park") || tourism.contains("attraction") || tourism.contains("viewpoint")) {
             cats.add("ENTERTAINMENT");
+            if (name.contains("fort") || name.contains("palace") || name.contains("history")) cats.add("HISTORIC");
         }
-        if (leisure.equals("park") || leisure.equals("garden") || leisure.equals("nature_reserve")) {
+        if (leisure.equals("park") || leisure.equals("garden") || leisure.equals("nature_reserve") || name.contains("garden") || name.contains("park") || name.contains("reserve")) {
             cats.add("LEISURE");
         }
 
         if (cats.isEmpty()) {
+            cats.add("ENTERTAINMENT");
             cats.add("LEISURE");
         }
         return cats;
@@ -552,6 +636,8 @@ public class TripServiceImpl implements TripService {
             List<HotelSuggestion> hotels
     ) {
 
+        int days = Math.max(1, Optional.ofNullable(t.getDays()).orElse(1));
+        String destination = Optional.ofNullable(t.getDestination()).orElse("");
         List<HotelDto> hotelDtos = new ArrayList<>();
 
         hotels.stream()
@@ -579,7 +665,7 @@ public class TripServiceImpl implements TripService {
                 .destination(t.getDestination())
                 .startDate(t.getStartDate())
                 .endDate(t.getEndDate())
-                .days(t.getDays())
+                .days(days)
                 .latitude(t.getLatitude())
                 .longitude(t.getLongitude())
                 .placeCategories(t.getPlaceCategories())
@@ -603,7 +689,7 @@ public class TripServiceImpl implements TripService {
                                 .toList()
                 )
                 .hotels(hotelDtos)
-                .budgetEstimates(generateBudgetEstimates(t.getDays(), t.getDestination()))
+                .budgetEstimates(generateBudgetEstimates(days, destination))
                 .weatherResponse(
                         (t.getLatitude() != null && t.getLongitude() != null)
                                 ? weatherService.getForecast(t.getLatitude(), t.getLongitude(), t.getStartDate(), t.getEndDate())

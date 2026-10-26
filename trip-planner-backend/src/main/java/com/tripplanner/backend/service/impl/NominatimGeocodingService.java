@@ -53,7 +53,6 @@ public class NominatimGeocodingService implements GeocodingService {
                     .queryParam("format", "jsonv2")
                     .queryParam("limit", 10)
                     .queryParam("addressdetails", 1)
-                    .queryParam("countrycodes", "in")
                     .encode()
                     .toUriString();
 

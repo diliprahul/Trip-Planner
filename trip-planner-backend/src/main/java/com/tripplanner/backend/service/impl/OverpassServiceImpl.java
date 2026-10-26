@@ -28,10 +28,13 @@ public class OverpassServiceImpl implements OverpassService {
             "https://z.overpass-api.de/api/interpreter"
     );
 
+    private static final long PLACES_TIME_BUDGET_MS = 15_000; // 15 seconds strict time budget for places
+    private static final long HOTELS_TIME_BUDGET_MS = 10_000; // 10 seconds strict time budget for hotels
+
     public OverpassServiceImpl() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(5_000);
-        factory.setReadTimeout(30_000);
+        factory.setConnectTimeout(3_000);
+        factory.setReadTimeout(8_000);
         this.overpassRestTemplate = new RestTemplate(factory);
         this.overpassRestTemplate.getInterceptors().add((request, body, execution) -> {
             request.getHeaders().set("User-Agent", "TripPlanner/1.0 (Overpass Client)");
@@ -52,9 +55,12 @@ public class OverpassServiceImpl implements OverpassService {
             return entry.value();
         }
 
-        // Attempt 1: 15km radius
+        long startTime = System.currentTimeMillis();
+        long deadline = startTime + PLACES_TIME_BUDGET_MS;
+
+        // Attempt 1: 15km radius with timeout 8s
         String query1 = """
-        [out:json][timeout:25];
+        [out:json][timeout:8];
         (
           nw["tourism"~"attraction|museum|viewpoint|zoo|theme_park|artwork|gallery"]["name"](around:15000,%f,%f);
           nw["historic"~"monument|castle|ruins|fort|palace|tomb|archaeological_site|heritage"]["name"](around:15000,%f,%f);
@@ -66,37 +72,40 @@ public class OverpassServiceImpl implements OverpassService {
         out center qt;
         """.formatted(lat, lon, lat, lon, lat, lon, lat, lon, lat, lon, lat, lon);
 
-        FetchResult attempt1 = fetch("Places Overpass", query1);
+        FetchResult attempt1 = fetch("Places Overpass", query1, deadline);
         List<PlaceResult> results = attempt1.results();
 
-        // Fallback attempt 2 only if attempt 1 did NOT time out/fail and results are fewer than minCount
-        if (!attempt1.timedOut() && results.size() < minCount) {
-            log.info("Initial tourist places count ({}) is less than requested minCount ({}), running fallback wider query (20km)", results.size(), minCount);
-            String query2 = """
-            [out:json][timeout:25];
-            (
-              nw["tourism"~"attraction|museum|viewpoint|zoo|theme_park|artwork|gallery"]["name"](around:20000,%f,%f);
-              nw["historic"~"monument|castle|ruins|fort|palace|tomb|archaeological_site|heritage"]["name"](around:20000,%f,%f);
-              nw["leisure"~"park|garden|nature_reserve"]["name"](around:20000,%f,%f);
-              nw["amenity"~"place_of_worship|marketplace|arts_centre|theatre"]["name"](around:20000,%f,%f);
-              nw["shop"~"mall|department_store"]["name"](around:20000,%f,%f);
-              nw["natural"~"peak|water|beach|cave_entrance|hot_spring"]["name"](around:20000,%f,%f);
-            );
-            out center qt;
-            """.formatted(lat, lon, lat, lon, lat, lon, lat, lon, lat, lon, lat, lon);
-            FetchResult attempt2 = fetch("Places Overpass fallback", query2);
-            List<PlaceResult> fallbackResults = attempt2.results();
+        // Fallback attempt 2 if results are fewer than minCount and time budget remains
+        if (results.size() < minCount && System.currentTimeMillis() < deadline) {
+            long remainingBudget = deadline - System.currentTimeMillis();
+            if (remainingBudget > 3000) {
+                log.info("Initial tourist places count ({}) is less than requested minCount ({}), running fallback wider query (20km)", results.size(), minCount);
+                String query2 = """
+                [out:json][timeout:6];
+                (
+                  nw["tourism"~"attraction|museum|viewpoint|zoo|theme_park|artwork|gallery"]["name"](around:20000,%f,%f);
+                  nw["historic"~"monument|castle|ruins|fort|palace|tomb|archaeological_site|heritage"]["name"](around:20000,%f,%f);
+                  nw["leisure"~"park|garden|nature_reserve"]["name"](around:20000,%f,%f);
+                  nw["amenity"~"place_of_worship|marketplace|arts_centre|theatre"]["name"](around:20000,%f,%f);
+                  nw["shop"~"mall|department_store"]["name"](around:20000,%f,%f);
+                  nw["natural"~"peak|water|beach|cave_entrance|hot_spring"]["name"](around:20000,%f,%f);
+                );
+                out center qt;
+                """.formatted(lat, lon, lat, lon, lat, lon, lat, lon, lat, lon, lat, lon);
+                FetchResult attempt2 = fetch("Places Overpass fallback", query2, deadline);
+                List<PlaceResult> fallbackResults = attempt2.results();
 
-            Map<String, PlaceResult> uniqueMap = new LinkedHashMap<>();
-            for (PlaceResult p : results) {
-                if (p.getName() != null) uniqueMap.put(p.getName().toLowerCase(Locale.ROOT).trim(), p);
+                Map<String, PlaceResult> uniqueMap = new LinkedHashMap<>();
+                for (PlaceResult p : results) {
+                    if (p.getName() != null) uniqueMap.put(p.getName().toLowerCase(Locale.ROOT).trim(), p);
+                }
+                for (PlaceResult p : fallbackResults) {
+                    if (p.getName() != null) uniqueMap.putIfAbsent(p.getName().toLowerCase(Locale.ROOT).trim(), p);
+                }
+                results = new ArrayList<>(uniqueMap.values());
+            } else {
+                log.warn("Skipping places fallback query due to near-exhausted time budget ({} ms remaining)", remainingBudget);
             }
-            for (PlaceResult p : fallbackResults) {
-                if (p.getName() != null) uniqueMap.putIfAbsent(p.getName().toLowerCase(Locale.ROOT).trim(), p);
-            }
-            results = new ArrayList<>(uniqueMap.values());
-        } else if (attempt1.timedOut()) {
-            log.warn("Skipping tourist places fallback due to Overpass timeout/failure on primary attempt.");
         }
 
         cacheResult(key, results);
@@ -111,43 +120,56 @@ public class OverpassServiceImpl implements OverpassService {
             return entry.value();
         }
 
-        // Attempt 1: 5km radius
+        long startTime = System.currentTimeMillis();
+        long deadline = startTime + HOTELS_TIME_BUDGET_MS;
+
+        // Attempt 1: 5km radius with broader accommodation queries
         String query1 = """
-        [out:json][timeout:15];
+        [out:json][timeout:6];
         (
-          nw['tourism'~'hotel|guest_house|hostel|motel|apartment|resort|inn|lodge']['name'](around:5000,%f,%f);
+          nw["tourism"~"hotel|guest_house|hostel|motel|apartment|resort|inn|lodge|chalet|alpine_hut|wilderness_hut"](around:5000,%f,%f);
+          nw["amenity"="hotel"](around:5000,%f,%f);
+          nw["building"="hotel"](around:5000,%f,%f);
         );
         out center qt;
-        """.formatted(lat, lon);
+        """.formatted(lat, lon, lat, lon, lat, lon);
 
-        FetchResult attempt1 = fetch("Hotels Overpass", query1);
+        FetchResult attempt1 = fetch("Hotels Overpass", query1, deadline);
         List<PlaceResult> results = attempt1.results();
 
         long validCount = results.stream().filter(h -> h.getName() != null && !isInvalidHotel(h.getName(), h.getTags())).count();
+        log.info("Initial hotel search around 5km returned {} raw results, {} valid hotels", results.size(), validCount);
 
-        // Fallback attempt 2 only if attempt 1 did NOT time out/fail and 0 valid hotels found
-        if (!attempt1.timedOut() && validCount == 0) {
-            log.info("Initial hotel search around 5km returned 0 valid hotels, running fallback wider query (10km)");
-            String query2 = """
-            [out:json][timeout:15];
-            (
-              nw['tourism'~'hotel|guest_house|hostel|motel|apartment|resort|inn|lodge']['name'](around:10000,%f,%f);
-            );
-            out center qt;
-            """.formatted(lat, lon);
-            FetchResult attempt2 = fetch("Hotels Overpass fallback", query2);
-            List<PlaceResult> fallbackResults = attempt2.results();
-            
-            Map<String, PlaceResult> uniqueMap = new LinkedHashMap<>();
-            for (PlaceResult h : results) {
-                if (h.getName() != null) uniqueMap.put(h.getName().toLowerCase(Locale.ROOT).trim(), h);
+        // Fallback attempt 2 if 0 valid hotels found and time budget remains
+        if (validCount == 0 && System.currentTimeMillis() < deadline) {
+            long remainingBudget = deadline - System.currentTimeMillis();
+            if (remainingBudget > 2000) {
+                log.info("Initial hotel search around 5km returned 0 valid hotels, running fallback wider query (10km)");
+                String query2 = """
+                [out:json][timeout:5];
+                (
+                  nw["tourism"~"hotel|guest_house|hostel|motel|apartment|resort|inn|lodge|chalet|alpine_hut|wilderness_hut"](around:10000,%f,%f);
+                  nw["amenity"="hotel"](around:10000,%f,%f);
+                  nw["building"="hotel"](around:10000,%f,%f);
+                );
+                out center qt;
+                """.formatted(lat, lon, lat, lon, lat, lon);
+                FetchResult attempt2 = fetch("Hotels Overpass fallback", query2, deadline);
+                List<PlaceResult> fallbackResults = attempt2.results();
+                long fallbackValidCount = fallbackResults.stream().filter(h -> h.getName() != null && !isInvalidHotel(h.getName(), h.getTags())).count();
+                log.info("Fallback hotel search around 10km returned {} raw results, {} valid hotels", fallbackResults.size(), fallbackValidCount);
+
+                Map<String, PlaceResult> uniqueMap = new LinkedHashMap<>();
+                for (PlaceResult h : results) {
+                    if (h.getName() != null) uniqueMap.put(h.getName().toLowerCase(Locale.ROOT).trim(), h);
+                }
+                for (PlaceResult h : fallbackResults) {
+                    if (h.getName() != null) uniqueMap.putIfAbsent(h.getName().toLowerCase(Locale.ROOT).trim(), h);
+                }
+                results = new ArrayList<>(uniqueMap.values());
+            } else {
+                log.warn("Skipping hotel fallback query due to near-exhausted time budget");
             }
-            for (PlaceResult h : fallbackResults) {
-                if (h.getName() != null) uniqueMap.putIfAbsent(h.getName().toLowerCase(Locale.ROOT).trim(), h);
-            }
-            results = new ArrayList<>(uniqueMap.values());
-        } else if (attempt1.timedOut()) {
-            log.warn("Skipping hotels fallback due to Overpass timeout/failure on primary attempt.");
         }
 
         cacheResult(key, results);
@@ -162,96 +184,150 @@ public class OverpassServiceImpl implements OverpassService {
     }
 
     @SuppressWarnings("unchecked")
-    private FetchResult fetch(String dataType, String query) {
+    private FetchResult fetch(String dataType, String query, long deadline) {
         boolean hadTimeoutOrNetworkError = false;
         String logPrefix = dataType.toLowerCase().contains("hotel") ? "Overpass Hotels" : "Overpass Places";
+        int maxRetriesPerUrl = 1; // Bounded retries
 
         for (String overpassUrl : OVERPASS_URLS) {
-            long startedAt = System.nanoTime();
-            log.info("{} request started", logPrefix);
-            try {
-                HttpHeaders headers = new HttpHeaders();
-                headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+            if (System.currentTimeMillis() >= deadline) {
+                log.warn("{} fetch aborted: overall time budget exhausted before trying {}", logPrefix, overpassUrl);
+                break;
+            }
 
-                HttpEntity<String> entity =
-                        new HttpEntity<>("data=" + java.net.URLEncoder.encode(query, java.nio.charset.StandardCharsets.UTF_8), headers);
-
-                Map<String, Object> response =
-                        overpassRestTemplate.postForObject(overpassUrl, entity, Map.class);
-
-                long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
-                log.info("{} request completed in {} ms", logPrefix, durationMs);
-
-                if (response == null || !response.containsKey("elements")) {
-                    return new FetchResult(Collections.emptyList(), false);
+            for (int retry = 0; retry <= maxRetriesPerUrl; retry++) {
+                if (System.currentTimeMillis() >= deadline) {
+                    log.warn("{} fetch aborted during retries: time budget exhausted", logPrefix);
+                    break;
                 }
 
-                List<Map<String, Object>> elements =
-                        (List<Map<String, Object>>) response.get("elements");
-                
-                List<PlaceResult> results = new ArrayList<>();
+                long startedAt = System.nanoTime();
+                log.info("{} request started on {} (attempt {})", logPrefix, overpassUrl, retry + 1);
+                try {
+                    HttpHeaders headers = new HttpHeaders();
+                    headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
 
-                for (Map<String, Object> el : elements) {
+                    HttpEntity<String> entity =
+                            new HttpEntity<>("data=" + java.net.URLEncoder.encode(query, java.nio.charset.StandardCharsets.UTF_8), headers);
 
-                    Map<String, Object> tags =
-                            (Map<String, Object>) el.get("tags");
+                    Map<String, Object> response =
+                            overpassRestTemplate.postForObject(overpassUrl, entity, Map.class);
 
-                    if (tags == null || !tags.containsKey("name")) continue;
-                    
-                    Map<String, String> stringTags = new java.util.HashMap<>();
-                    for (Map.Entry<String, Object> entry : tags.entrySet()) {
-                        stringTags.put(entry.getKey(), String.valueOf(entry.getValue()));
+                    long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
+                    log.info("{} request completed on {} in {} ms", logPrefix, overpassUrl, durationMs);
+
+                    if (response == null || !response.containsKey("elements")) {
+                        return new FetchResult(Collections.emptyList(), false);
                     }
 
-                    String name = (String) tags.get("name");
-                    if (logPrefix.contains("Hotels") && isInvalidHotel(name, stringTags)) continue;
+                    List<Map<String, Object>> elements =
+                            (List<Map<String, Object>>) response.get("elements");
 
-                    Double latVal = (Double) el.get("lat");
-                    Double lonVal = (Double) el.get("lon");
+                    List<PlaceResult> results = new ArrayList<>();
 
-                    if ((latVal == null || lonVal == null) && el.containsKey("center")) {
-                        Map<String, Object> center =
-                                (Map<String, Object>) el.get("center");
-                        latVal = (Double) center.get("lat");
-                        lonVal = (Double) center.get("lon");
+                    for (Map<String, Object> el : elements) {
+                        Map<String, Object> tags =
+                                (Map<String, Object>) el.get("tags");
+
+                        if (tags == null) continue;
+
+                        Map<String, String> stringTags = new java.util.HashMap<>();
+                        for (Map.Entry<String, Object> entry : tags.entrySet()) {
+                            stringTags.put(entry.getKey(), String.valueOf(entry.getValue()));
+                        }
+
+                        String name = stringTags.get("name");
+                        if (name == null || name.isBlank()) {
+                            name = stringTags.get("name:en");
+                        }
+                        if (name == null || name.isBlank()) {
+                            name = stringTags.get("brand");
+                        }
+                        if (name == null || name.isBlank()) {
+                            name = stringTags.get("operator");
+                        }
+
+                        if (name == null || name.isBlank()) continue;
+
+                        if (logPrefix.contains("Hotels") && isInvalidHotel(name, stringTags)) continue;
+
+                        Double latVal = parseCoordinate(el.get("lat"));
+                        Double lonVal = parseCoordinate(el.get("lon"));
+
+                        if ((latVal == null || lonVal == null) && el.containsKey("center")) {
+                            Map<String, Object> center =
+                                    (Map<String, Object>) el.get("center");
+                            if (center != null) {
+                                latVal = parseCoordinate(center.get("lat"));
+                                lonVal = parseCoordinate(center.get("lon"));
+                            }
+                        }
+
+                        if (latVal == null || lonVal == null) continue;
+
+                        String imageUrl = null;
+                        if (tags.containsKey("wikimedia_commons")) {
+                            imageUrl =
+                                    "https://commons.wikimedia.org/wiki/Special:FilePath/"
+                                            + tags.get("wikimedia_commons");
+                        }
+
+                        results.add(
+                                PlaceResult.builder()
+                                        .name(name)
+                                        .address(addressFrom(tags))
+                                        .latitude(latVal)
+                                        .longitude(lonVal)
+                                        .imageUrl(imageUrl)
+                                        .tags(stringTags)
+                                        .build()
+                        );
                     }
 
-                    if (latVal == null || lonVal == null) continue;
+                    return new FetchResult(results, false);
 
-                    String imageUrl = null;
-                    if (tags.containsKey("wikimedia_commons")) {
-                        imageUrl =
-                                "https://commons.wikimedia.org/wiki/Special:FilePath/"
-                                        + tags.get("wikimedia_commons");
+                } catch (Exception e) {
+                    long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
+                    if (isTransientOverpassError(e)) {
+                        hadTimeoutOrNetworkError = true;
+                        log.warn("{} request failed on {} with transient error after {} ms: {}. Retrying...", logPrefix, overpassUrl, durationMs, e.getMessage());
+                        if (retry < maxRetriesPerUrl && System.currentTimeMillis() + 1000 < deadline) {
+                            try {
+                                Thread.sleep(500L * (retry + 1));
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                            }
+                            continue;
+                        }
+                    } else {
+                        log.warn("{} request failed on {} after {} ms: {}", logPrefix, overpassUrl, durationMs, e.getMessage());
+                        hadTimeoutOrNetworkError = true;
                     }
-
-                    results.add(
-                            PlaceResult.builder()
-                                    .name((String) tags.get("name"))
-                                    .address(addressFrom(tags))
-                                    .latitude(latVal)
-                                    .longitude(lonVal)
-                                    .imageUrl(imageUrl)
-                                    .tags(stringTags)
-                                    .build()
-                    );
-                }
-
-                return new FetchResult(results, false);
-
-            } catch (Exception e) {
-                long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
-                if (isTimeoutOrNetworkError(e)) {
-                    hadTimeoutOrNetworkError = true;
-                    log.warn("{} request timed out after {} ms", logPrefix, durationMs);
-                } else {
-                    log.warn("{} request failed after {} ms: {}", logPrefix, durationMs, e.getMessage());
-                    hadTimeoutOrNetworkError = true;
+                    break; // try next URL
                 }
             }
         }
 
         return new FetchResult(Collections.emptyList(), hadTimeoutOrNetworkError);
+    }
+
+    private boolean isTransientOverpassError(Exception e) {
+        if (isTimeoutOrNetworkError(e)) {
+            return true;
+        }
+        if (e instanceof org.springframework.web.client.HttpStatusCodeException hs) {
+            int status = hs.getStatusCode().value();
+            return status == 502 || status == 503 || status == 504 || status == 429;
+        }
+        Throwable cause = e.getCause();
+        while (cause != null) {
+            if (cause instanceof org.springframework.web.client.HttpStatusCodeException hs) {
+                int status = hs.getStatusCode().value();
+                if (status == 502 || status == 503 || status == 504 || status == 429) return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     private boolean isTimeoutOrNetworkError(Exception e) {
@@ -260,8 +336,8 @@ public class OverpassServiceImpl implements OverpassService {
         }
         Throwable cause = e.getCause();
         while (cause != null) {
-            if (cause instanceof java.net.SocketTimeoutException 
-                || cause instanceof java.net.ConnectException 
+            if (cause instanceof java.net.SocketTimeoutException
+                || cause instanceof java.net.ConnectException
                 || cause instanceof java.util.concurrent.TimeoutException) {
                 return true;
             }
@@ -271,19 +347,24 @@ public class OverpassServiceImpl implements OverpassService {
     }
 
     private boolean isInvalidHotel(String name, Map<String, String> tags) {
-        String lowerName = name.toLowerCase();
+        String lowerName = name.toLowerCase(Locale.ROOT);
 
         List<String> keywords = List.of(
-            "boys", "girls", "student", "pg", "residential", "shop", "restaurant", "cafe"
+            "boys", "girls", "student", "pg", "residential"
         );
-        
+
         for (String keyword : keywords) {
             if (lowerName.contains(keyword)) return true;
         }
 
         if (tags != null) {
-            if (tags.containsKey("shop") || "restaurant".equals(tags.get("amenity")) || "cafe".equals(tags.get("amenity"))) {
-                return true;
+            String shop = tags.get("shop");
+            String amenity = tags.get("amenity");
+            if (shop != null && !shop.isBlank()) return true;
+            if ("restaurant".equals(amenity) || "cafe".equals(amenity) || "fast_food".equals(amenity)) {
+                if (!lowerName.contains("hotel") && !lowerName.contains("resort") && !lowerName.contains("inn")) {
+                    return true;
+                }
             }
         }
 
@@ -299,5 +380,17 @@ public class OverpassServiceImpl implements OverpassService {
                 .filter(Objects::nonNull)
                 .map(String::valueOf)
                 .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    private Double parseCoordinate(Object obj) {
+        if (obj == null) return null;
+        if (obj instanceof Number) {
+            return ((Number) obj).doubleValue();
+        }
+        try {
+            return Double.parseDouble(String.valueOf(obj));
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

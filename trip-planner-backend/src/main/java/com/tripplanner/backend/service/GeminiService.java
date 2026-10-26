@@ -5,4 +5,5 @@ import java.util.Map;
 
 public interface GeminiService {
     List<Map<String, String>> generateItinerary(String destination, int days);
+    List<Map<String, String>> generateHotels(String destination, int limit);
 }

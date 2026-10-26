@@ -1,18 +1,30 @@
 # OS
 .DS_Store
+Thumbs.db
+Desktop.ini
 
 # IDE
 .idea/
 .vscode/
+*.iml
 
-# Backend
+# Java / Maven
 target/
+*.class
 *.log
+hs_err_pid*
+.rebel-*
 
-# Frontend (Vite)
+# Frontend (Node.js / Vite)
 node_modules/
 dist/
+.vite/
+
+# Environment variables and secrets
 .env
+.env.*
+!.env.example
+
 # Local API testing files
 body.json
 body_paris.json
@@ -31,3 +43,15 @@ trip_request_temp.json
 test_*.json
 test_*.txt
 overpass_*.txt
+
+# Local database and application files
+*.sqlite
+*.db
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+# Runtime uploads
+trip-planner-backend/uploads/*
+!trip-planner-backend/uploads/.gitkeep

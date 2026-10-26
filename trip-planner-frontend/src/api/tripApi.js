@@ -38,7 +38,11 @@ export const updateProfile = async (data) => {
 };
 
 export const uploadProfilePicture = async (formData) => {
-  const response = await apiClient.post("/api/auth/profile/picture", formData);
+  const response = await apiClient.post("/api/auth/profile/picture", formData, {
+    headers: {
+      "Content-Type": undefined,
+    },
+  });
   return response.data;
 };
 

@@ -66,6 +66,18 @@ class TripPlannerBackendApplicationTests {
 						.latitude(17.4062)
 						.longitude(78.4695)
 						.tags(Map.of("amenity", "place_of_worship", "wikidata", "Q34567", "wikipedia", "en:Birla_Mandir"))
+						.build(),
+				PlaceResult.builder()
+						.name("Hussain Sagar")
+						.latitude(17.4239)
+						.longitude(78.4738)
+						.tags(Map.of("natural", "water", "wikidata", "Q45678", "wikipedia", "en:Hussain_Sagar"))
+						.build(),
+				PlaceResult.builder()
+						.name("Salar Jung Museum")
+						.latitude(17.3713)
+						.longitude(78.4804)
+						.tags(Map.of("tourism", "museum", "wikidata", "Q56789", "wikipedia", "en:Salar_Jung_Museum"))
 						.build()
 		);
 
@@ -275,6 +287,24 @@ class TripPlannerBackendApplicationTests {
 		System.out.println("Stored Categories: " + itinerary.getPlaceCategories());
 		System.out.println("Generated Places Count: " + itinerary.getDayPlans().size());
 		System.out.println("=======================================");
+	}
+
+	@Test
+	void testGeocodingFailureThrowsBadRequest() {
+		CreateTripRequest request = new CreateTripRequest();
+		request.setOrigin("Vijayawada");
+		request.setDestination("InvalidUnknownCityXYZ");
+		request.setStartDate(LocalDate.of(2026, 12, 1));
+		request.setEndDate(LocalDate.of(2026, 12, 3));
+
+		TripDetailResponse trip = tripService.createTrip(request, testEmail);
+		assertNotNull(trip);
+
+		org.springframework.web.server.ResponseStatusException ex = assertThrows(
+				org.springframework.web.server.ResponseStatusException.class,
+				() -> tripService.generateItinerary(trip.getId(), testEmail)
+		);
+		assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, ex.getStatusCode());
 	}
 
 }

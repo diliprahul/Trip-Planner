@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useTrip } from "../context/useTrip";
 import { useAuth } from "../context/useAuth";
 import { getTripById } from "../api/tripApi";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import WeatherForecast from "./WeatherForecast";
 
@@ -19,6 +19,25 @@ let DefaultIcon = L.icon({
 });
 
 L.Marker.prototype.options.icon = DefaultIcon;
+
+const hasCoordinates = (latitude, longitude) =>
+  Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude));
+
+const MapBounds = ({ center, dayPlans }) => {
+  const map = useMap();
+
+  useEffect(() => {
+    const attractionPositions = (dayPlans || [])
+      .filter((plan) => hasCoordinates(plan.latitude, plan.longitude))
+      .map((plan) => [Number(plan.latitude), Number(plan.longitude)]);
+
+    if (attractionPositions.length > 0) {
+      map.fitBounds([center, ...attractionPositions], { padding: [40, 40], maxZoom: 13 });
+    }
+  }, [map, center, dayPlans]);
+
+  return null;
+};
 
 const Itinerary = () => {
   const { itinerary, setItinerary } = useTrip();
@@ -125,9 +144,10 @@ const Itinerary = () => {
                 <Marker position={center}>
                   <Popup><b>{itinerary.destination}</b><br/>City Center</Popup>
                 </Marker>
-                {itinerary.dayPlans.map((plan, idx) => (
-                  plan.latitude && plan.longitude && (
-                    <Marker key={idx} position={[plan.latitude, plan.longitude]}>
+                <MapBounds center={center} dayPlans={itinerary.dayPlans} />
+                {itinerary.dayPlans?.map((plan, idx) => (
+                  hasCoordinates(plan.latitude, plan.longitude) && (
+                    <Marker key={idx} position={[Number(plan.latitude), Number(plan.longitude)]}>
                       <Popup>
                         <b>Day {plan.dayNumber}: {plan.placeName}</b><br/>
                         {plan.description}
@@ -139,7 +159,7 @@ const Itinerary = () => {
            </div>
            <div style={{ padding: "20px", textAlign: "center", borderTop: "1px solid #f1f5f9" }}>
               <p style={{ color: "#64748b", fontSize: "14px", margin: 0 }}>
-                Showing <b>{itinerary.destination}</b> and <b>{itinerary.dayPlans.length}</b> recommended attractions
+                Showing <b>{itinerary.destination}</b> and <b>{itinerary.dayPlans?.length || 0}</b> recommended attractions
               </p>
            </div>
         </div>
@@ -154,7 +174,7 @@ const Itinerary = () => {
           Daily Itinerary
         </h2>
         <div style={{ display: "grid", gap: "24px" }}>
-          {itinerary.dayPlans.map((plan) => (
+          {itinerary.dayPlans?.map((plan) => (
             <div
               key={plan.dayNumber}
               style={{
@@ -222,12 +242,12 @@ const Itinerary = () => {
           Where to Stay
         </h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "20px" }}>
-          {itinerary.hotels.length === 0 && (
+          {(!itinerary.hotels || itinerary.hotels.length === 0) && (
             <p style={{ color: "#64748b", margin: 0 }}>
               No named accommodations were returned by OpenStreetMap for this area. Try generating again later.
             </p>
           )}
-          {itinerary.hotels.map((hotel, i) => (
+          {itinerary.hotels?.map((hotel, i) => (
             <div
               key={i}
               style={{
@@ -273,7 +293,7 @@ const Itinerary = () => {
         </p>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "24px" }}>
-          {itinerary.budgetEstimates.map((tier, i) => (
+          {itinerary.budgetEstimates?.map((tier, i) => (
             <div key={i} style={{
               background: tier.budgetCategory === "Standard Budget" ? "#eff6ff" : "white",
               padding: "32px",
