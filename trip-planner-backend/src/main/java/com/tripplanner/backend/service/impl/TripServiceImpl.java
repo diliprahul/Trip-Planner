@@ -221,13 +221,12 @@ public class TripServiceImpl implements TripService {
                         .stream()
                         .filter(Objects::nonNull)
                         .filter(hotel -> hotel.get("name") != null && !hotel.get("name").isBlank())
-                        .map(hotel -> HotelSuggestion.builder()
-                                .trip(trip)
-                                .name(hotel.get("name").trim())
-                                .address(hotel.getOrDefault("address", trip.getDestination()))
-                                .latitude(trip.getLatitude())
-                                .longitude(trip.getLongitude())
-                                .build())
+                        .map(hotel -> {
+                            String address = hotel.getOrDefault("address", trip.getDestination());
+                            GeoLocation location = locationOrNull(hotel.get("name"), address, trip.getDestination(), true);
+                            return HotelSuggestion.builder().trip(trip).name(hotel.get("name").trim()).address(address)
+                                    .latitude(location.getLatitude()).longitude(location.getLongitude()).build();
+                        })
                         .toList();
             } catch (Exception e) {
                 log.warn("Gemini hotel fallback failed for {}: {}", trip.getDestination(), e.getMessage());
@@ -269,11 +268,10 @@ public class TripServiceImpl implements TripService {
         }
         return trips.stream()
                 .filter(t -> t != null)
-                .map(t -> map(
-                        t,
-                        dayPlanRepository.findByTripOrderByDayNumberAsc(t),
-                        hotelSuggestionRepository.findByTrip(t)
-                ))
+                .map(t -> {
+                    List<DayPlan> plans = dayPlanRepository.findByTripOrderByDayNumberAsc(t);
+                    return map(t, plans, hotelSuggestionRepository.findByTrip(t));
+                })
                 .toList();
     }
 
@@ -287,6 +285,34 @@ public class TripServiceImpl implements TripService {
         dayPlanRepository.deleteByTrip(trip);
         hotelSuggestionRepository.deleteByTrip(trip);
         tripRepository.delete(trip);
+    }
+
+    @Override
+    public CoordinateBackfillReport backfillCoordinates(Long id, String userEmail, boolean dryRun) {
+        Trip trip = tripRepository.findById(id).orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Trip not found"));
+        validateOwnership(trip, userEmail);
+        int updated = 0, skipped = 0, failed = 0;
+        List<DayPlan> plans = dayPlanRepository.findByTripOrderByDayNumberAsc(trip);
+        for (DayPlan plan : plans) {
+            if (isUsableLocation(new GeoLocation(plan.getLatitude(), plan.getLongitude()))) { skipped++; continue; }
+            GeoLocation location = geocodePlace(plan.getPlaceName(), trip.getDestination());
+            if (!isUsableLocation(location)) { failed++; continue; }
+            updated++;
+            if (!dryRun) { plan.setLatitude(location.getLatitude()); plan.setLongitude(location.getLongitude()); dayPlanRepository.save(plan); }
+        }
+        for (HotelSuggestion hotel : hotelSuggestionRepository.findByTrip(trip)) {
+            boolean copiedDestination = sameLocation(hotel.getLatitude(), hotel.getLongitude(), trip.getLatitude(), trip.getLongitude());
+            if (isUsableLocation(new GeoLocation(hotel.getLatitude(), hotel.getLongitude())) && !copiedDestination) { skipped++; continue; }
+            GeoLocation location = locationOrNull(hotel.getName(), hotel.getAddress(), trip.getDestination(), true);
+            if (!isUsableLocation(location)) {
+                failed++;
+                if (!dryRun && copiedDestination) { hotel.setLatitude(null); hotel.setLongitude(null); hotelSuggestionRepository.save(hotel); }
+                continue;
+            }
+            updated++;
+            if (!dryRun) { hotel.setLatitude(location.getLatitude()); hotel.setLongitude(location.getLongitude()); hotelSuggestionRepository.save(hotel); }
+        }
+        return CoordinateBackfillReport.builder().tripId(id).dryRun(dryRun).updated(updated).skipped(skipped).failed(failed).build();
     }
 
     // =========================================================
@@ -387,7 +413,14 @@ public class TripServiceImpl implements TripService {
 
     private boolean isUsableLocation(GeoLocation location) {
         return location != null && location.getLatitude() != null && location.getLongitude() != null
+                && location.getLatitude() >= -90 && location.getLatitude() <= 90
+                && location.getLongitude() >= -180 && location.getLongitude() <= 180
                 && !(location.getLatitude() == 0.0 && location.getLongitude() == 0.0);
+    }
+
+    private boolean sameLocation(Double lat, Double lon, Double otherLat, Double otherLon) {
+        return lat != null && lon != null && otherLat != null && otherLon != null
+                && Math.abs(lat - otherLat) < 0.000001 && Math.abs(lon - otherLon) < 0.000001;
     }
 
     private GeoLocation geocodePlace(String placeName, String destination) {
@@ -395,7 +428,7 @@ public class TripServiceImpl implements TripService {
             return null;
         }
         try {
-            GeoLocation location = geocodingService.geocodeCity(placeName + ", " + destination);
+            GeoLocation location = geocodingService.geocodeAttraction(placeName.trim(), destination.trim());
             if (isUsableLocation(location)) {
                 return location;
             }
@@ -406,6 +439,38 @@ public class TripServiceImpl implements TripService {
         }
         log.warn("Could not geocode generated attraction '{}' in {}", placeName, destination);
         return null;
+    }
+
+    private GeoLocation locationOrNull(String name, String address, String destination, boolean hotel) {
+        GeoLocation location = hotel
+                ? geocodingService.geocodeHotel(name, address, destination)
+                : geocodingService.geocodeAttraction(name, destination);
+        return isUsableLocation(location) ? location : new GeoLocation(null, null);
+    }
+
+    /**
+     * Repairs legacy fallback plans that were saved before their attraction lookup
+     * completed. Names and descriptions are never changed; unresolved places remain
+     * unresolved rather than receiving a destination-centre coordinate.
+     */
+    private void populateMissingPlanCoordinates(Trip trip, List<DayPlan> plans) {
+        List<DayPlan> updatedPlans = plans.stream()
+                .filter(plan -> !isUsableLocation(new GeoLocation(plan.getLatitude(), plan.getLongitude())))
+                .filter(plan -> plan.getPlaceName() != null && !plan.getPlaceName().isBlank())
+                .filter(plan -> {
+                    GeoLocation location = geocodePlace(plan.getPlaceName(), trip.getDestination());
+                    if (!isUsableLocation(location)) {
+                        return false;
+                    }
+                    plan.setLatitude(location.getLatitude());
+                    plan.setLongitude(location.getLongitude());
+                    return true;
+                })
+                .toList();
+
+        if (!updatedPlans.isEmpty()) {
+            dayPlanRepository.saveAll(updatedPlans);
+        }
     }
 
     private double distanceSquared(Trip trip, PlaceResult place) {
@@ -622,12 +687,12 @@ public class TripServiceImpl implements TripService {
         return "OTHER";
     }
 
-    private String buildMapsUrl(String name, Double lat, Double lng, String city) {
-        if (lat != null && lng != null) {
+    private String buildMapsUrl(String name, String address, Double lat, Double lng, String city) {
+        if (isUsableLocation(new GeoLocation(lat, lng))) {
             return "https://www.google.com/maps/dir/?api=1&destination=" + lat + "," + lng;
         }
         return "https://www.google.com/maps/search/?api=1&query="
-                + (name + " " + city).replace(" ", "+");
+                + (name + " " + (address == null || address.isBlank() ? city : address) + " " + city).replace(" ", "+");
     }
 
     private TripDetailResponse map(
@@ -651,6 +716,7 @@ public class TripServiceImpl implements TripService {
                                 .searchUrl(
                                         buildMapsUrl(
                                                 h.getName(),
+                                                h.getAddress(),
                                                 h.getLatitude(),
                                                 h.getLongitude(),
                                                 t.getDestination()
@@ -680,6 +746,7 @@ public class TripServiceImpl implements TripService {
                                         .mapsUrl(
                                                 buildMapsUrl(
                                                         dp.getPlaceName(),
+                                                        null,
                                                         dp.getLatitude(),
                                                         dp.getLongitude(),
                                                         t.getDestination()

@@ -2,6 +2,7 @@ package com.tripplanner.backend.service;
 
 import com.tripplanner.backend.dto.CreateTripRequest;
 import com.tripplanner.backend.dto.TripDetailResponse;
+import com.tripplanner.backend.dto.CoordinateBackfillReport;
 
 import java.util.List;
 
@@ -16,4 +17,6 @@ public interface TripService {
     List<TripDetailResponse> getMyTrips(String userEmail);
 
     void deleteTrip(Long id, String userEmail);
+
+    CoordinateBackfillReport backfillCoordinates(Long id, String userEmail, boolean dryRun);
 }

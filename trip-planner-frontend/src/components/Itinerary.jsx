@@ -21,7 +21,11 @@ let DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 const hasCoordinates = (latitude, longitude) =>
-  Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude));
+  latitude !== null && latitude !== undefined && latitude !== ""
+  && longitude !== null && longitude !== undefined && longitude !== ""
+  && Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))
+  && Number(latitude) >= -90 && Number(latitude) <= 90
+  && Number(longitude) >= -180 && Number(longitude) <= 180;
 
 const MapBounds = ({ center, dayPlans }) => {
   const map = useMap();
@@ -31,8 +35,14 @@ const MapBounds = ({ center, dayPlans }) => {
       .filter((plan) => hasCoordinates(plan.latitude, plan.longitude))
       .map((plan) => [Number(plan.latitude), Number(plan.longitude)]);
 
-    if (attractionPositions.length > 0) {
-      map.fitBounds([center, ...attractionPositions], { padding: [40, 40], maxZoom: 13 });
+    const validCenter = hasCoordinates(center?.[0], center?.[1]) ? center : null;
+
+    if (validCenter) {
+      if (attractionPositions.length > 0) {
+        map.fitBounds([validCenter, ...attractionPositions], { padding: [40, 40], maxZoom: 13 });
+      } else {
+        map.setView(validCenter, 13);
+      }
     }
   }, [map, center, dayPlans]);
 
@@ -105,8 +115,12 @@ const Itinerary = () => {
     if (url) window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  const center = [itinerary.latitude || 20.5937, itinerary.longitude || 78.9629];
-
+  const center = hasCoordinates(itinerary.latitude, itinerary.longitude)
+    ? [Number(itinerary.latitude), Number(itinerary.longitude)]
+    : [20.5937, 78.9629];
+  const validAttractions = (itinerary.dayPlans || []).filter((plan) =>
+    hasCoordinates(plan.latitude, plan.longitude)
+  );
   return (
     <div style={{ background: "#f1f5f9", minHeight: "100vh", paddingBottom: "80px" }}>
       {/* HEADER */}
@@ -136,7 +150,7 @@ const Itinerary = () => {
         {/* SECTION 1: CITY MAP */}
         <div style={{ marginTop: "-40px", background: "white", borderRadius: "24px", overflow: "hidden", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)", border: "1px solid #e2e8f0" }}>
            <div style={{ height: "400px", width: "100%", zIndex: 1 }}>
-              <MapContainer center={center} zoom={13} style={{ height: "100%", width: "100%" }}>
+              <MapContainer key={`${center[0]}-${center[1]}-${validAttractions.length}`} center={center} zoom={13} style={{ height: "100%", width: "100%" }}>
                 <TileLayer
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -144,22 +158,23 @@ const Itinerary = () => {
                 <Marker position={center}>
                   <Popup><b>{itinerary.destination}</b><br/>City Center</Popup>
                 </Marker>
-                <MapBounds center={center} dayPlans={itinerary.dayPlans} />
-                {itinerary.dayPlans?.map((plan, idx) => (
-                  hasCoordinates(plan.latitude, plan.longitude) && (
-                    <Marker key={idx} position={[Number(plan.latitude), Number(plan.longitude)]}>
+                <MapBounds center={center} dayPlans={validAttractions} />
+                {validAttractions.map((plan) => (
+                    <Marker key={plan.dayNumber} position={[Number(plan.latitude), Number(plan.longitude)]}>
                       <Popup>
                         <b>Day {plan.dayNumber}: {plan.placeName}</b><br/>
-                        {plan.description}
+                        {plan.description}<br/>
+                        {plan.mapsUrl && <a href={plan.mapsUrl} target="_blank" rel="noreferrer">Open in Google Maps</a>}
                       </Popup>
                     </Marker>
-                  )
                 ))}
               </MapContainer>
            </div>
            <div style={{ padding: "20px", textAlign: "center", borderTop: "1px solid #f1f5f9" }}>
               <p style={{ color: "#64748b", fontSize: "14px", margin: 0 }}>
-                Showing <b>{itinerary.destination}</b> and <b>{itinerary.dayPlans?.length || 0}</b> recommended attractions
+                {validAttractions.length > 0
+                  ? <>Showing <b>{validAttractions.length}</b> attraction pin{validAttractions.length === 1 ? "" : "s"} in <b>{itinerary.destination}</b>.</>
+                  : <>No attraction coordinates are available yet. Run the authenticated coordinate backfill to add only verified locations.</>}
               </p>
            </div>
         </div>

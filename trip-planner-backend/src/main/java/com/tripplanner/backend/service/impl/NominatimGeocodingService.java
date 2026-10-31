@@ -4,184 +4,151 @@ import com.tripplanner.backend.service.GeocodingService;
 import com.tripplanner.backend.util.GeoLocation;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
-import java.util.List;
-import java.util.Map;
+import java.time.Duration;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class NominatimGeocodingService implements GeocodingService {
-
+    private static final String SEARCH_URL = "https://nominatim.openstreetmap.org/search";
+    private static final long SUCCESS_TTL_MS = Duration.ofHours(24).toMillis();
+    private static final long NEGATIVE_TTL_MS = Duration.ofHours(1).toMillis();
+    private static final long TRANSIENT_FAILURE_TTL_MS = Duration.ofMinutes(2).toMillis();
+    private static final Object RATE_LOCK = new Object();
+    private static long nextRequestAtMs;
     private final RestTemplate restTemplate;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
-    private static final long CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+    private record CacheEntry(GeoLocation location, long expiresAtMs) { }
 
-    private record CacheEntry(GeoLocation value, long timestamp) {}
+    private static final Map<String, GeoLocation> CURATED_ATTRACTIONS = Map.of(
+            "charminar, hyderabad", new GeoLocation(17.3616, 78.4747),
+            "golconda fort, hyderabad", new GeoLocation(17.3833, 78.4011),
+            "ramoji film city, hyderabad", new GeoLocation(17.2543, 78.6826),
+            "salar jung museum, hyderabad", new GeoLocation(17.3713, 78.4804),
+            "chowmahalla palace, hyderabad", new GeoLocation(17.3592, 78.4704),
+            "qutb shahi tombs, hyderabad", new GeoLocation(17.3917, 78.3953),
+            "birla mandir, hyderabad", new GeoLocation(17.4053, 78.4691),
+            "hussain sagar lake, hyderabad", new GeoLocation(17.4239, 78.4738)
+    );
 
-    @Override
-    public GeoLocation geocodeCity(String city) {
-        if (city == null) {
-            return null;
-        }
+    @Override public GeoLocation geocodeCity(String city) { return lookup(city, null, city, false); }
+    @Override public GeoLocation geocodeAttraction(String name, String destination) { return lookup(name + ", " + destination + ", India", name, destination, true); }
+    @Override public GeoLocation geocodeHotel(String name, String address, String destination) {
+        String context = address == null || address.isBlank() ? destination : address + ", " + destination;
+        return lookup(name + ", " + context + ", India", name, destination, true);
+    }
 
-        // Normalize input: trim leading/trailing whitespace, collapse repeated whitespace
-        String normalized = city.replaceAll("\\s+", " ").trim();
-        if (normalized.isEmpty()) {
-            return null;
-        }
+    private GeoLocation lookup(String query, String expectedName, String destination, boolean requireNamedPlace) {
+        String normalized = normalize(query);
+        if (normalized.isEmpty()) return null;
 
-        CacheEntry entry = cache.get(normalized);
-        if (entry != null && (System.currentTimeMillis() - entry.timestamp() < CACHE_TTL_MS)) {
-            log.info("Geocoding cache hit for input='{}' normalized='{}'", city, normalized);
-            return entry.value();
-        }
-
-        try {
-            long startedAt = System.nanoTime();
-            String url = UriComponentsBuilder
-                    .fromHttpUrl("https://nominatim.openstreetmap.org/search")
-                    .queryParam("q", normalized)
-                    .queryParam("format", "jsonv2")
-                    .queryParam("limit", 10)
-                    .queryParam("addressdetails", 1)
-                    .encode()
-                    .toUriString();
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("User-Agent", "TripPlannerApp-1.0-UniqueContact-dilip@example.com");
-            HttpEntity<String> entity = new HttpEntity<>(headers);
-
-            ResponseEntity<List> response = restTemplate.exchange(url, HttpMethod.GET, entity, List.class);
-            List<Map<String, Object>> candidates = response.getBody();
-
-            if (candidates != null && !candidates.isEmpty()) {
-                Map<String, Object> bestCandidate = selectBestCandidate(candidates, normalized);
-
-                if (bestCandidate != null) {
-                    double lat = Double.parseDouble(String.valueOf(bestCandidate.get("lat")));
-                    double lon = Double.parseDouble(String.valueOf(bestCandidate.get("lon")));
-                    String displayName = String.valueOf(bestCandidate.get("display_name"));
-                    String type = String.valueOf(bestCandidate.get("type"));
-                    String cls = String.valueOf(bestCandidate.get("class"));
-                    Object importanceObj = bestCandidate.get("importance");
-                    double importance = importanceObj != null ? Double.parseDouble(String.valueOf(importanceObj)) : 0.0;
-                    
-                    Map<String, Object> address = (Map<String, Object>) bestCandidate.get("address");
-                    String country = address != null ? (String) address.get("country") : null;
-                    String state = address != null ? (String) address.get("state") : null;
-
-                    GeoLocation loc = new GeoLocation(lat, lon);
-                    cache.put(normalized, new CacheEntry(loc, System.currentTimeMillis()));
-
-                    log.info("Nominatim geocoded input='{}' (normalized='{}') -> selected='{}' (lat={}, lon={}, type={}, class={}, state={}, country={}, importance={}) in {} ms",
-                            city, normalized, displayName, lat, lon, type, cls, state, country, importance, (System.nanoTime() - startedAt) / 1_000_000);
-                    return loc;
+        // Check curated registry first if expectedName and destination are present
+        if (expectedName != null && destination != null) {
+            String normName = normalize(expectedName);
+            String normDest = normalize(destination);
+            String curatedKey = normName + ", " + normDest;
+            GeoLocation curatedLoc = CURATED_ATTRACTIONS.get(curatedKey);
+            if (curatedLoc != null && valid(curatedLoc.getLatitude(), curatedLoc.getLongitude())) {
+                log.info("Curated registry exact matched name='{}' destination='{}' -> {}", expectedName, destination, curatedLoc);
+                return curatedLoc;
+            }
+            // Flexible match: check each entry in CURATED_ATTRACTIONS where destination matches
+            for (Map.Entry<String, GeoLocation> entry : CURATED_ATTRACTIONS.entrySet()) {
+                String key = entry.getKey();
+                if (key.endsWith(", " + normDest)) {
+                    String attractionPart = key.substring(0, key.lastIndexOf(", "));
+                    if (normName.contains(attractionPart) || attractionPart.contains(normName)) {
+                        GeoLocation loc = entry.getValue();
+                        if (loc != null && valid(loc.getLatitude(), loc.getLongitude())) {
+                            log.info("Curated registry flexible matched name='{}' destination='{}' (key='{}') -> {}", expectedName, destination, key, loc);
+                            return loc;
+                        }
+                    }
                 }
             }
-        } catch (Exception e) {
-            log.error("Geocoding failed for city='{}': {}", city, e.getMessage());
         }
 
+        CacheEntry cached = cache.get(normalized);
+        if (cached != null && cached.expiresAtMs() > System.currentTimeMillis()) return cached.location();
+        String url = UriComponentsBuilder.fromHttpUrl(SEARCH_URL).queryParam("q", normalized)
+                .queryParam("format", "jsonv2").queryParam("limit", 10).queryParam("addressdetails", 1).encode().toUriString();
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                awaitRateLimit();
+                HttpHeaders headers = new HttpHeaders();
+                headers.set("User-Agent", "TripPlanner/1.0 (contact: dilip@example.com)");
+                ResponseEntity<List> response = restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), List.class);
+                GeoLocation result = select(response.getBody(), expectedName, destination, requireNamedPlace);
+                cache.put(normalized, new CacheEntry(result, System.currentTimeMillis() + (result == null ? NEGATIVE_TTL_MS : SUCCESS_TTL_MS)));
+                log.info("Nominatim query='{}' result={}", normalized, result == null ? "no-valid-match" : "resolved");
+                return result;
+            } catch (HttpStatusCodeException e) {
+                int status = e.getStatusCode().value();
+                if (status == 403 || status == 404 || status == 429 || attempt == 1) {
+                    return cacheFailure(normalized, "HTTP " + status);
+                }
+                sleep(retryDelay(e.getResponseHeaders(), attempt));
+            } catch (Exception e) { return cacheFailure(normalized, e.getClass().getSimpleName()); }
+        }
         return null;
     }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> selectBestCandidate(List<Map<String, Object>> candidates, String queryCity) {
-        Map<String, Object> best = null;
-        double bestScore = -Double.MAX_VALUE;
-
+    private GeoLocation cacheFailure(String key, String reason) {
+        log.warn("Nominatim query='{}' failed: {}", key, reason);
+        cache.put(key, new CacheEntry(null, System.currentTimeMillis() + TRANSIENT_FAILURE_TTL_MS));
+        return null;
+    }
+    private GeoLocation select(List<Map<String, Object>> candidates, String expectedName, String destination, boolean named) {
+        if (candidates == null) return null;
         for (Map<String, Object> candidate : candidates) {
-            String type = String.valueOf(candidate.get("type"));
-            String cls = String.valueOf(candidate.get("class"));
-            String displayName = String.valueOf(candidate.get("display_name"));
-            String lowerDisplay = displayName.toLowerCase();
-            Object importanceObj = candidate.get("importance");
-            double importance = importanceObj != null ? Double.parseDouble(String.valueOf(importanceObj)) : 0.0;
-            Map<String, Object> address = (Map<String, Object>) candidate.get("address");
-
-            String country = address != null ? (String) address.get("country") : null;
-            String countryCode = address != null ? (String) address.get("country_code") : null;
-            String state = address != null ? (String) address.get("state") : null;
-
-            double score = 0.0;
-
-            // 1. India preference (India-focused trip planner)
-            if ((countryCode != null && countryCode.equalsIgnoreCase("in")) ||
-                (country != null && country.toLowerCase().contains("india")) ||
-                lowerDisplay.contains("india")) {
-                score += 5000.0;
-            } else {
-                score -= 10000.0;
-            }
-
-            // 2. Prioritize major city, administrative, town, municipality entities
-            if ("city".equalsIgnoreCase(type) || ("place".equalsIgnoreCase(cls) && "city".equalsIgnoreCase(type))) {
-                score += 1500.0;
-            } else if ("administrative".equalsIgnoreCase(type) || "administrative".equalsIgnoreCase(cls)) {
-                score += 1000.0;
-            } else if ("town".equalsIgnoreCase(type) || "municipality".equalsIgnoreCase(type)) {
-                score += 800.0;
-            } else if ("village".equalsIgnoreCase(type)) {
-                score += 200.0;
-            }
-
-            // 3. Heavy penalty for suburbs, neighbourhoods, localities, villages, hamlets, residential areas
-            if (isSuburbanOrMinor(type)) {
-                score -= 2000.0;
-            }
-
-            // 4. Importance score factor
-            score += importance * 100.0;
-
-            // 5. Name match bonus
-            String lowerQuery = queryCity.toLowerCase();
-            if (lowerDisplay.contains(lowerQuery)) {
-                score += 200.0;
-            }
-            if (address != null) {
-                String cityNameInAddr = (String) address.get("city");
-                if (cityNameInAddr == null) cityNameInAddr = (String) address.get("town");
-                if (cityNameInAddr == null) cityNameInAddr = (String) address.get("municipality");
-                if (cityNameInAddr == null) cityNameInAddr = (String) address.get("state_district");
-                if (cityNameInAddr != null && cityNameInAddr.toLowerCase().contains(lowerQuery)) {
-                    score += 300.0;
-                }
-            }
-
-            log.debug("Candidate: displayName={}, type={}, cls={}, state={}, country={}, importance={}, score={}", displayName, type, cls, state, country, importance, score);
-
-            if (score > bestScore) {
-                bestScore = score;
-                best = candidate;
-            }
+            String display = String.valueOf(candidate.getOrDefault("display_name", "")).toLowerCase(Locale.ROOT);
+            if (named && (!matchesName(display, expectedName) || !matchesDestination(display, destination))) continue;
+            Double lat = number(candidate.get("lat")); Double lon = number(candidate.get("lon"));
+            if (valid(lat, lon)) return new GeoLocation(lat, lon);
         }
-
-        return best != null ? best : candidates.get(0);
+        return null;
     }
-
-    private boolean isSuburbanOrMinor(String type) {
-        if (type == null) return false;
-        String t = type.toLowerCase();
-        return t.equals("suburb") ||
-               t.equals("neighbourhood") ||
-               t.equals("locality") ||
-               t.equals("residential") ||
-               t.equals("village") ||
-               t.equals("hamlet") ||
-               t.equals("isolated_dwelling") ||
-               t.equals("quarter") ||
-               t.equals("borough") ||
-               t.equals("city_block") ||
-               t.equals("allotments") ||
-               t.equals("plot");
+    private boolean matchesName(String display, String name) {
+        List<String> significantTokens = Arrays.stream(normalize(name).split(" ")).filter(t -> t.length() > 3).toList();
+        if (significantTokens.isEmpty()) return false;
+        List<String> displayTokens = Arrays.stream(normalize(display).split(" ")).toList();
+        long matchingTokens = significantTokens.stream()
+                .filter(token -> displayTokens.stream().anyMatch(displayToken -> similar(token, displayToken)))
+                .count();
+        return matchingTokens * 2 >= significantTokens.size() + 1;
     }
+    private boolean similar(String left, String right) {
+        if (left.equals(right)) return true;
+        if (left.length() < 5 || right.length() < 5) return false;
+        return levenshtein(left, right) <= 1 && Math.max(left.length(), right.length()) >= 6;
+    }
+    private int levenshtein(String left, String right) {
+        int[] previous = new int[right.length() + 1];
+        for (int j = 0; j <= right.length(); j++) previous[j] = j;
+        for (int i = 1; i <= left.length(); i++) {
+            int[] current = new int[right.length() + 1]; current[0] = i;
+            for (int j = 1; j <= right.length(); j++) current[j] = Math.min(Math.min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + (left.charAt(i - 1) == right.charAt(j - 1) ? 0 : 1));
+            previous = current;
+        }
+        return previous[right.length()];
+    }
+    private boolean matchesDestination(String display, String destination) { return normalize(destination).isBlank() || display.contains(normalize(destination)); }
+    private Double number(Object value) { try { return value == null ? null : Double.valueOf(String.valueOf(value)); } catch (NumberFormatException e) { return null; } }
+private boolean valid(Double lat, Double lon) {
+    return lat != null && lon != null
+            && lat >= -90 && lat <= 90
+            && lon >= -180 && lon <= 180
+            && !(lat == 0.0 && lon == 0.0);
+}
+private String normalize(String value) { return value == null ? "" : value.toLowerCase(Locale.ROOT).replaceAll("[^\\p{IsAlphabetic}\\p{IsDigit}]+", " ").trim().replaceAll("\\s+", " "); }
+    private void awaitRateLimit() { synchronized (RATE_LOCK) { long wait = nextRequestAtMs - System.currentTimeMillis(); if (wait > 0) sleep(wait); nextRequestAtMs = System.currentTimeMillis() + 1_000; } }
+    private long retryDelay(HttpHeaders h, int attempt) { long header = 0; try { header = h == null || h.getFirst("Retry-After") == null ? 0 : Long.parseLong(h.getFirst("Retry-After")) * 1_000; } catch (NumberFormatException ignored) { } return Math.max(header, 1_000L << attempt) + new Random().nextInt(250); }
+    private void sleep(long ms) { try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
 }

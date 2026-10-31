@@ -1,5 +1,9 @@
 package com.tripplanner.backend.service.impl;
 
+import com.tripplanner.backend.dto.TripDetailResponse;
+import com.tripplanner.backend.entity.DayPlan;
+import com.tripplanner.backend.entity.Trip;
+import com.tripplanner.backend.entity.User;
 import com.tripplanner.backend.repository.DayPlanRepository;
 import com.tripplanner.backend.repository.HotelSuggestionRepository;
 import com.tripplanner.backend.repository.TripRepository;
@@ -8,29 +12,46 @@ import com.tripplanner.backend.service.GeocodingService;
 import com.tripplanner.backend.service.GeminiService;
 import com.tripplanner.backend.service.OverpassService;
 import com.tripplanner.backend.service.WeatherService;
+import com.tripplanner.backend.util.GeoLocation;
 import com.tripplanner.backend.util.PlaceResult;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
+import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
 
 class TripServiceImplTest {
 
     private TripServiceImpl tripService;
+    private TripRepository tripRepo;
+    private UserRepository userRepo;
+    private DayPlanRepository dayRepo;
+    private HotelSuggestionRepository hotelRepo;
+    private GeocodingService geoService;
+    private OverpassService overpassService;
+    private WeatherService weatherService;
+    private GeminiService geminiService;
 
     @BeforeEach
     void setUp() {
-        TripRepository tripRepo = Mockito.mock(TripRepository.class);
-        UserRepository userRepo = Mockito.mock(UserRepository.class);
-        DayPlanRepository dayRepo = Mockito.mock(DayPlanRepository.class);
-        HotelSuggestionRepository hotelRepo = Mockito.mock(HotelSuggestionRepository.class);
-        GeocodingService geoService = Mockito.mock(GeocodingService.class);
-        OverpassService overpassService = Mockito.mock(OverpassService.class);
-        WeatherService weatherService = Mockito.mock(WeatherService.class);
-        GeminiService geminiService = Mockito.mock(GeminiService.class);
+        tripRepo = Mockito.mock(TripRepository.class);
+        userRepo = Mockito.mock(UserRepository.class);
+        dayRepo = Mockito.mock(DayPlanRepository.class);
+        hotelRepo = Mockito.mock(HotelSuggestionRepository.class);
+        geoService = Mockito.mock(GeocodingService.class);
+        overpassService = Mockito.mock(OverpassService.class);
+        weatherService = Mockito.mock(WeatherService.class);
+        geminiService = Mockito.mock(GeminiService.class);
 
         tripService = new TripServiceImpl(tripRepo, userRepo, dayRepo, hotelRepo, geoService, overpassService, weatherService, geminiService);
     }
@@ -193,5 +214,76 @@ class TripServiceImplTest {
 
         var cats = tripService.getCategories(place);
         assertFalse(cats.contains("INVALID_CATEGORY"));
+    }
+
+    @Test
+    void persistsAndReturnsCoordinatesForEveryGeocodedFallbackAttraction() {
+        User user = User.builder().id(1L).email("owner@example.com").name("Owner").build();
+        Trip trip = Trip.builder()
+                .id(906L)
+                .user(user)
+                .origin("Hyderabad")
+                .destination("Vijayawada")
+                .startDate(LocalDate.of(2026, 10, 1))
+                .endDate(LocalDate.of(2026, 10, 10))
+                .days(10)
+                .latitude(16.5062)
+                .longitude(80.6480)
+                .build();
+        List<Map<String, String>> attractions = java.util.stream.IntStream.rangeClosed(1, 10)
+                .mapToObj(i -> Map.of("name", "Attraction " + i, "description", "Description " + i))
+                .toList();
+        AtomicReference<List<DayPlan>> savedPlans = new AtomicReference<>(List.of());
+
+        when(tripRepo.findById(906L)).thenReturn(Optional.of(trip));
+        when(userRepo.findByEmail("owner@example.com")).thenReturn(Optional.of(user));
+        when(overpassService.getTouristPlaces(anyDouble(), anyDouble(), anyInt())).thenReturn(List.of());
+        when(overpassService.getHotels(anyDouble(), anyDouble())).thenReturn(List.of());
+        when(geminiService.generateItinerary("Vijayawada", 10)).thenReturn(attractions);
+        when(geoService.geocodeAttraction(anyString(), eq("Vijayawada"))).thenAnswer(invocation -> {
+            String query = invocation.getArgument(0, String.class);
+            int number = Integer.parseInt(query.replaceAll(".*Attraction (\\d+).*", "$1"));
+            return new GeoLocation(16.40 + number / 100.0, 80.50 + number / 100.0);
+        });
+        doAnswer(invocation -> {
+            savedPlans.set(List.copyOf(invocation.getArgument(0)));
+            return savedPlans.get();
+        }).when(dayRepo).saveAll(any());
+        when(dayRepo.findByTripOrderByDayNumberAsc(trip)).thenAnswer(invocation -> savedPlans.get());
+        when(hotelRepo.findByTrip(trip)).thenReturn(List.of());
+
+        TripDetailResponse response = tripService.generateItinerary(906L, "owner@example.com");
+
+        assertEquals(10, savedPlans.get().size());
+        assertTrue(savedPlans.get().stream().allMatch(plan -> plan.getLatitude() != null && plan.getLongitude() != null));
+        assertEquals(10, response.getDayPlans().size());
+        assertTrue(response.getDayPlans().stream().allMatch(plan -> plan.getLatitude() != null && plan.getLongitude() != null));
+        verify(geoService, times(10)).geocodeAttraction(anyString(), eq("Vijayawada"));
+    }
+
+    @Test
+    void backfillsMissingCoordinatesOnlyWhenExplicitlyRequested() {
+        User user = User.builder().id(1L).email("owner@example.com").name("Owner").build();
+        Trip trip = Trip.builder()
+                .id(906L).user(user).destination("Vijayawada").days(1)
+                .latitude(16.5062).longitude(80.6480).build();
+        DayPlan plan = DayPlan.builder().trip(trip).dayNumber(1)
+                .placeName("Kanaka Durga Temple").description("Temple visit").build();
+
+        when(tripRepo.findById(906L)).thenReturn(Optional.of(trip));
+        when(userRepo.findByEmail("owner@example.com")).thenReturn(Optional.of(user));
+        when(dayRepo.findByTripOrderByDayNumberAsc(trip)).thenReturn(List.of(plan));
+        when(hotelRepo.findByTrip(trip)).thenReturn(List.of());
+        when(geoService.geocodeAttraction("Kanaka Durga Temple", "Vijayawada"))
+                .thenReturn(new GeoLocation(16.5150, 80.6100));
+
+        TripDetailResponse response = tripService.getTripById(906L, "owner@example.com");
+        assertNull(response.getDayPlans().get(0).getLatitude());
+        var report = tripService.backfillCoordinates(906L, "owner@example.com", false);
+
+        assertEquals(16.5150, plan.getLatitude());
+        assertEquals(80.6100, plan.getLongitude());
+        assertEquals(1, report.getUpdated());
+        verify(dayRepo).save(plan);
     }
 }

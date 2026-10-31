@@ -24,8 +24,7 @@ public class OverpassServiceImpl implements OverpassService {
 
     private static final List<String> OVERPASS_URLS = List.of(
             "https://overpass-api.de/api/interpreter",
-            "https://lz4.overpass-api.de/api/interpreter",
-            "https://z.overpass-api.de/api/interpreter"
+            "https://lz4.overpass-api.de/api/interpreter"
     );
 
     private static final long PLACES_TIME_BUDGET_MS = 15_000; // 15 seconds strict time budget for places
@@ -76,7 +75,7 @@ public class OverpassServiceImpl implements OverpassService {
         List<PlaceResult> results = attempt1.results();
 
         // Fallback attempt 2 if results are fewer than minCount and time budget remains
-        if (results.size() < minCount && System.currentTimeMillis() < deadline) {
+        if (!attempt1.timedOut() && results.size() < minCount && System.currentTimeMillis() < deadline) {
             long remainingBudget = deadline - System.currentTimeMillis();
             if (remainingBudget > 3000) {
                 log.info("Initial tourist places count ({}) is less than requested minCount ({}), running fallback wider query (20km)", results.size(), minCount);
@@ -141,7 +140,7 @@ public class OverpassServiceImpl implements OverpassService {
         log.info("Initial hotel search around 5km returned {} raw results, {} valid hotels", results.size(), validCount);
 
         // Fallback attempt 2 if 0 valid hotels found and time budget remains
-        if (validCount == 0 && System.currentTimeMillis() < deadline) {
+        if (!attempt1.timedOut() && validCount == 0 && System.currentTimeMillis() < deadline) {
             long remainingBudget = deadline - System.currentTimeMillis();
             if (remainingBudget > 2000) {
                 log.info("Initial hotel search around 5km returned 0 valid hotels, running fallback wider query (10km)");
@@ -178,16 +177,15 @@ public class OverpassServiceImpl implements OverpassService {
 
     @SuppressWarnings("unchecked")
     private void cacheResult(String key, List<PlaceResult> results) {
-        if (!results.isEmpty()) {
-            cache.put(key, new CacheEntry(results, System.currentTimeMillis()));
-        }
+        // Cache empty responses too, preventing a request storm while public servers are overloaded.
+        cache.put(key, new CacheEntry(List.copyOf(results), System.currentTimeMillis()));
     }
 
     @SuppressWarnings("unchecked")
     private FetchResult fetch(String dataType, String query, long deadline) {
         boolean hadTimeoutOrNetworkError = false;
         String logPrefix = dataType.toLowerCase().contains("hotel") ? "Overpass Hotels" : "Overpass Places";
-        int maxRetriesPerUrl = 1; // Bounded retries
+        int maxRetriesPerUrl = 0; // At most one request per endpoint; endpoint rotation is the bounded retry.
 
         for (String overpassUrl : OVERPASS_URLS) {
             if (System.currentTimeMillis() >= deadline) {

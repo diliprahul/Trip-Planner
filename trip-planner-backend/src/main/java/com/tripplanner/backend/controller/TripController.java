@@ -2,6 +2,7 @@ package com.tripplanner.backend.controller;
 
 import com.tripplanner.backend.dto.CreateTripRequest;
 import com.tripplanner.backend.dto.TripDetailResponse;
+import com.tripplanner.backend.dto.CoordinateBackfillReport;
 import com.tripplanner.backend.service.TripService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -49,6 +50,12 @@ public class TripController {
             @PathVariable Long id,
             Authentication authentication) {
         return ResponseEntity.ok(tripService.generateItinerary(id, getEmail(authentication)));
+    }
+
+    @PostMapping("/{id}/coordinates/backfill")
+    public ResponseEntity<CoordinateBackfillReport> backfillCoordinates(
+            @PathVariable Long id, @RequestParam(defaultValue = "false") boolean dryRun, Authentication authentication) {
+        return ResponseEntity.ok(tripService.backfillCoordinates(id, getEmail(authentication), dryRun));
     }
 
     @DeleteMapping("/{id}")
