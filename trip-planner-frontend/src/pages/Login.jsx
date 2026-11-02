@@ -122,23 +122,13 @@ const Login = () => {
   };
 
   return (
-    <div className="auth-editorial-wrapper">
-      <div className="auth-editorial-image">
-        <img
-          src="/images/travel-hero.jpg"
-          alt="Editorial travel inspiration"
-          onError={(e) => {
-            e.target.style.display = "none";
-          }}
-        />
-        <div className="auth-image-placeholder-content">
-          <span className="editorial-tag">TripPlanner Editorial</span>
-          <h2>Journeys Curated with Intent</h2>
-          <p>Discover breathtaking destinations, intelligent itineraries, and effortless planning designed for the discerning traveler.</p>
-        </div>
-      </div>
-      <div className="auth-editorial-form-panel">
-        <div className="auth-editorial-card">
+    <div 
+      className="auth-editorial-wrapper"
+      style={{
+        backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.45), rgba(37, 42, 36, 0.65)), url('/images/travel-hero.jpg')`
+      }}
+    >
+      <div className="auth-editorial-card" style={{ maxWidth: "460px", width: "100%", margin: "0 auto" }}>
           {resetStep === "login" && (
             <>
               <h1>Welcome Back</h1>
@@ -359,8 +349,7 @@ const Login = () => {
           )}
         </div>
       </div>
-    </div>
-  );
+    );
 };
 
 export default Login;

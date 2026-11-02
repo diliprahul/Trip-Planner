@@ -6,24 +6,22 @@ const Home = () => {
   const { error } = useTrip();
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", width: "100%", flex: 1 }}>
-      <div 
-        style={{
-          position: "relative",
-          width: "100%",
-          minHeight: "380px",
-          backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.45), rgba(37, 42, 36, 0.65)), url('/images/Home-page-hero.jpg')`,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#ffffff",
-          textAlign: "center",
-          padding: "60px 24px"
-        }}
-      >
-        <div style={{ maxWidth: "700px", zIndex: 2 }}>
+    <div 
+      style={{ 
+        display: "flex", 
+        flexDirection: "column", 
+        width: "100%", 
+        flex: 1,
+        backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.45), rgba(37, 42, 36, 0.65)), url('/images/Home-page-hero.jpg')`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+        backgroundAttachment: "scroll",
+        minHeight: "calc(100vh - 70px)"
+      }}
+    >
+      <div style={{ textAlign: "center", padding: "60px 24px 30px", color: "#ffffff" }}>
+        <div style={{ maxWidth: "700px", margin: "0 auto", zIndex: 2 }}>
           <span style={{
             fontFamily: "var(--font-heading)",
             fontSize: "12px",
@@ -47,7 +45,7 @@ const Home = () => {
           </p>
         </div>
       </div>
-      <div style={{ padding: "40px 20px", display: "flex", justifyContent: "center", flex: 1 }}>
+      <div style={{ padding: "10px 20px 60px", display: "flex", justifyContent: "center", flex: 1 }}>
         <TripForm />
       </div>
       {error && <div style={{ maxWidth: "600px", margin: "0 auto 24px" }}><ErrorMessage message={error} /></div>}

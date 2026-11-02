@@ -231,11 +231,18 @@ button:disabled {
 /* ===== Editorial Auth Layout (Login & Register) ===== */
 .auth-editorial-wrapper {
   display: flex;
+  flex-direction: column;
   min-height: calc(100vh - 70px);
   width: 100%;
-  background: var(--bg-primary);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: scroll;
   color: var(--text-primary);
   font-family: var(--font-body);
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
 }
 
 .auth-editorial-image {

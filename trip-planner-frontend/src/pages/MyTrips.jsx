@@ -66,57 +66,60 @@ const MyTrips = () => {
   }
 
   return (
-    <div style={{ width: "100%", flex: 1, paddingBottom: "60px" }}>
+    <div 
+      style={{ 
+        width: "100%", 
+        flex: 1, 
+        paddingBottom: "60px",
+        backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.5), rgba(37, 42, 36, 0.7)), url('/images/My-trips-hero.jpg')`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+        backgroundAttachment: "scroll",
+        minHeight: "calc(100vh - 70px)"
+      }}
+    >
       <div
         style={{
-          position: "relative",
           width: "100%",
-          minHeight: "240px",
-          backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.5), rgba(37, 42, 36, 0.7)), url('/images/My-trips-hero.jpg')`,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "40px 40px",
-          color: "#ffffff",
-          flexWrap: "wrap",
-          gap: "20px",
-          marginBottom: "40px"
+          padding: "50px 40px 30px",
+          color: "#ffffff"
         }}
       >
-        <div style={{ zIndex: 2 }}>
-          <span style={{
-            fontFamily: "var(--font-heading)",
-            fontSize: "11px",
-            fontWeight: "700",
-            letterSpacing: "1.5px",
-            textTransform: "uppercase",
-            color: "#E9E3D6",
-            background: "rgba(36, 75, 60, 0.85)",
-            padding: "4px 10px",
-            borderRadius: "4px",
-            display: "inline-block",
-            marginBottom: "8px"
-          }}>
-            Saved Itineraries
-          </span>
-          <h1 style={{ fontSize: "32px", fontWeight: "800", color: "#FFFFFF", margin: 0, fontFamily: "var(--font-heading)" }}>
-            My Trips
-          </h1>
-          <p style={{ fontSize: "15px", color: "#E9E3D6", margin: "6px 0 0" }}>
-            Access and manage all your planned travel itineraries in one place.
-          </p>
+        <div style={{ maxWidth: "1000px", margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "20px", zIndex: 2 }}>
+          <div>
+            <span style={{
+              fontFamily: "var(--font-heading)",
+              fontSize: "11px",
+              fontWeight: "700",
+              letterSpacing: "1.5px",
+              textTransform: "uppercase",
+              color: "#E9E3D6",
+              background: "rgba(36, 75, 60, 0.85)",
+              padding: "4px 10px",
+              borderRadius: "4px",
+              display: "inline-block",
+              marginBottom: "8px"
+            }}>
+              Saved Itineraries
+            </span>
+            <h1 style={{ fontSize: "32px", fontWeight: "800", color: "#FFFFFF", margin: 0, fontFamily: "var(--font-heading)" }}>
+              My Trips
+            </h1>
+            <p style={{ fontSize: "15px", color: "#E9E3D6", margin: "6px 0 0" }}>
+              Access and manage all your planned travel itineraries in one place.
+            </p>
+          </div>
+          <Link 
+            to="/" 
+            style={{ background: "var(--brand-primary)", color: "white", padding: "12px 24px", borderRadius: "6px", fontWeight: "600", fontSize: "14px", textDecoration: "none", zIndex: 2, border: "1px solid rgba(255,255,255,0.2)" }}
+          >
+            Plan New Trip
+          </Link>
         </div>
-        <Link 
-          to="/" 
-          style={{ background: "var(--brand-primary)", color: "white", padding: "12px 24px", borderRadius: "6px", fontWeight: "600", fontSize: "14px", textDecoration: "none", zIndex: 2, border: "1px solid rgba(255,255,255,0.2)" }}
-        >
-          Plan New Trip
-        </Link>
       </div>
 
-      <div style={{ maxWidth: "1000px", margin: "0 auto", padding: "0 20px" }}>
+      <div style={{ maxWidth: "1000px", margin: "0 auto", padding: "20px 20px 0" }}>
       {error && (
         <div style={{ color: "#991b1b", background: "#fef2f2", padding: "16px", borderRadius: "8px", marginBottom: "24px", border: "1px solid #fca5a5" }}>
           {error}

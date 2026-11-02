@@ -182,21 +182,25 @@ const Profile = () => {
   }
 
   return (
-    <div style={{ width: "100%", flex: 1, paddingBottom: "60px" }}>
+    <div 
+      style={{ 
+        width: "100%", 
+        flex: 1, 
+        paddingBottom: "60px",
+        backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.5), rgba(37, 42, 36, 0.7)), url('/images/Profile-page-hero.jpg')`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+        backgroundAttachment: "scroll",
+        minHeight: "calc(100vh - 70px)"
+      }}
+    >
       {/* Hero Header Section */}
       <div
         style={{
-          position: "relative",
           width: "100%",
-          minHeight: "220px",
-          backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.5), rgba(37, 42, 36, 0.7)), url('/images/Profile-page-hero.jpg')`,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          display: "flex",
-          alignItems: "center",
-          padding: "40px 40px",
-          color: "#ffffff",
-          marginBottom: "40px"
+          padding: "50px 40px 20px",
+          color: "#ffffff"
         }}
       >
         <div style={{ maxWidth: "650px", margin: "0 auto", width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "16px", zIndex: 2 }}>
@@ -246,7 +250,7 @@ const Profile = () => {
         </div>
       </div>
 
-      <div style={{ maxWidth: "650px", margin: "0 auto", padding: "0 16px", width: "100%" }}>
+      <div style={{ maxWidth: "650px", margin: "0 auto", padding: "20px 16px 0", width: "100%" }}>
         {error && (
           <div style={{ color: "#991b1b", background: "#fef2f2", border: "1px solid #fca5a5", padding: "12px 16px", borderRadius: "6px", marginBottom: "20px", fontSize: "14px" }}>
             {error}

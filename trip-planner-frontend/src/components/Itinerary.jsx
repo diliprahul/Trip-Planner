@@ -127,18 +127,26 @@ const Itinerary = () => {
   );
 
   return (
-    <div style={{ background: "var(--bg-primary)", minHeight: "100vh", paddingBottom: "80px" }}>
+    <div 
+      style={{ 
+        backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.55), rgba(37, 42, 36, 0.75)), url('/images/iternary-page-hero.jpg')`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+        backgroundAttachment: "scroll",
+        minHeight: "calc(100vh - 70px)", 
+        paddingBottom: "80px",
+        width: "100%",
+        flex: 1
+      }}
+    >
       {/* HEADER */}
       <div
         style={{
-          position: "relative",
-          backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.55), rgba(37, 42, 36, 0.75)), url('/images/iternary-page-hero.jpg')`,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
+          width: "100%",
           color: "white",
-          padding: "70px 24px",
-          textAlign: "center",
-          borderBottom: "1px solid var(--color-border)"
+          padding: "60px 24px 30px",
+          textAlign: "center"
         }}
       >
         <span style={{
@@ -169,10 +177,10 @@ const Itinerary = () => {
         </div>
       </div>
 
-      <div style={{ maxWidth: "1000px", margin: "auto", padding: "0 20px" }}>
+      <div style={{ maxWidth: "1000px", margin: "auto", padding: "20px 20px 0" }}>
         
         {/* SECTION 1: CITY MAP */}
-        <div style={{ marginTop: "-32px", background: "var(--surface-primary)", borderRadius: "12px", overflow: "hidden", boxShadow: "0 4px 6px -1px rgba(37, 42, 36, 0.05)", border: "1px solid var(--color-border)" }}>
+        <div style={{ background: "var(--surface-primary)", borderRadius: "12px", overflow: "hidden", boxShadow: "0 4px 6px -1px rgba(37, 42, 36, 0.05)", border: "1px solid var(--color-border)" }}>
            <div style={{ height: "400px", width: "100%", zIndex: 1 }}>
               <MapContainer key={`${center[0]}-${center[1]}-${validAttractions.length}`} center={center} zoom={13} style={{ height: "100%", width: "100%" }}>
                 <TileLayer

@@ -60,23 +60,13 @@ const Register = () => {
   };
 
   return (
-    <div className="auth-editorial-wrapper">
-      <div className="auth-editorial-image">
-        <img
-          src="/images/Register-page-hero.jpg"
-          alt="Editorial travel inspiration"
-          onError={(e) => {
-            e.target.style.display = "none";
-          }}
-        />
-        <div className="auth-image-placeholder-content">
-          <span className="editorial-tag">TripPlanner Editorial</span>
-          <h2>Begin Your Next Adventure</h2>
-          <p>Join thousands of travelers crafting personalized itineraries with intelligent local insights.</p>
-        </div>
-      </div>
-      <div className="auth-editorial-form-panel">
-        <div className="auth-editorial-card">
+    <div 
+      className="auth-editorial-wrapper"
+      style={{
+        backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.45), rgba(37, 42, 36, 0.65)), url('/images/Register-page-hero.jpg')`
+      }}
+    >
+      <div className="auth-editorial-card" style={{ maxWidth: "460px", width: "100%", margin: "0 auto" }}>
           <h1>Create Account</h1>
           <p className="subtitle">Start planning and saving your personalized travel itineraries</p>
 
@@ -167,7 +157,6 @@ const Register = () => {
             Already have an account? <Link to="/login" className="auth-link">Sign In</Link>
           </p>
         </div>
-      </div>
     </div>
   );
 };
