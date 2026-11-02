@@ -269,8 +269,22 @@ public class TripServiceImpl implements TripService {
         return trips.stream()
                 .filter(t -> t != null)
                 .map(t -> {
-                    List<DayPlan> plans = dayPlanRepository.findByTripOrderByDayNumberAsc(t);
-                    return map(t, plans, hotelSuggestionRepository.findByTrip(t));
+                    int days = Math.max(1, Optional.ofNullable(t.getDays()).orElse(1));
+                    return TripDetailResponse.builder()
+                            .id(t.getId())
+                            .origin(t.getOrigin())
+                            .destination(t.getDestination())
+                            .startDate(t.getStartDate())
+                            .endDate(t.getEndDate())
+                            .days(days)
+                            .latitude(t.getLatitude())
+                            .longitude(t.getLongitude())
+                            .placeCategories(t.getPlaceCategories())
+                            .dayPlans(List.of())
+                            .hotels(List.of())
+                            .budgetEstimates(List.of())
+                            .weatherResponse(null)
+                            .build();
                 })
                 .toList();
     }

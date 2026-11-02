@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 class GeminiServiceImplTest {
 
@@ -131,4 +132,55 @@ class GeminiServiceImplTest {
         assertEquals("Taj Falaknuma Palace", result.get(0).get("name"));
         assertEquals("Hyderabad", result.get(0).get("address"));
     }
+
+    @Test
+    void testConsecutiveJsonObjectsResponseReturnsSuggestions() {
+        ReflectionTestUtils.setField(geminiService, "apiKey", "test-api-key");
+
+        String consecutiveJson = "{\"day\":\"1\",\"name\":\"Dashashwamedh Ghat\",\"description\":\"Ganga Aarti\"}" +
+                                 "{\"day\":\"2\",\"name\":\"Kashi Vishwanath Temple\",\"description\":\"Lord Shiva\"}";
+
+        Map<String, Object> mockGeminiResponse = Map.of(
+                "candidates", List.of(
+                        Map.of(
+                                "content", Map.of(
+                                        "parts", List.of(
+                                                Map.of("text", consecutiveJson)
+                                        )
+                                )
+                        )
+                )
+        );
+
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(mockGeminiResponse));
+
+        List<Map<String, String>> result = geminiService.generateItinerary("Varanasi", 2);
+
+        assertNotNull(result);
+        assertEquals(2, result.size());
+        assertEquals("Dashashwamedh Ghat", result.get(0).get("name"));
+        assertEquals("Kashi Vishwanath Temple", result.get(1).get("name"));
+    }
+
+    @Test
+    void testHttp503RetriesAndReturnsEmptyList() {
+        ReflectionTestUtils.setField(geminiService, "apiKey", "test-api-key");
+
+        org.springframework.web.client.HttpServerErrorException ex =
+                new org.springframework.web.client.HttpServerErrorException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE);
+
+        when(restTemplate.exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class)))
+                .thenThrow(ex);
+
+        long start = System.currentTimeMillis();
+        List<Map<String, String>> result = geminiService.generateItinerary("Varanasi", 2);
+        long duration = System.currentTimeMillis() - start;
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+        // Verify multiple attempts were made due to retry (3 attempts with exponential backoff)
+        Mockito.verify(restTemplate, times(3)).exchange(any(String.class), eq(HttpMethod.POST), any(HttpEntity.class), eq(Map.class));
+    }
 }
+

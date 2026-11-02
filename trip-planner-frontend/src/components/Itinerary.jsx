@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTrip } from "../context/useTrip";
 import { useAuth } from "../context/useAuth";
-import { getTripById } from "../api/tripApi";
+import { getTripById, generateItinerary } from "../api/tripApi";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import WeatherForecast from "./WeatherForecast";
@@ -66,11 +66,15 @@ const Itinerary = () => {
     }
 
     if (tripId) {
-      if (!itinerary || itinerary.id !== Number(tripId) || !itinerary.dayPlans || itinerary.dayPlans.length === 0) {
+      if (!itinerary || itinerary.id !== Number(tripId)) {
         const loadTrip = async () => {
           setFetching(true);
+          setError(null);
           try {
-            const data = await getTripById(tripId);
+            let data = await getTripById(tripId);
+            if (!data.dayPlans || data.dayPlans.length === 0) {
+              data = await generateItinerary(tripId);
+            }
             setItinerary(data);
           } catch (err) {
             console.error(err);

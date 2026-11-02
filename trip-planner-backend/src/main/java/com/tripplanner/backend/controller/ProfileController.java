@@ -24,8 +24,12 @@ public class ProfileController {
         if (authentication == null || !authentication.isAuthenticated() || "anonymousUser".equals(authentication.getPrincipal())) {
             return ResponseEntity.status(401).build();
         }
-        User user = userService.findByEmail(authentication.getName());
-        return ResponseEntity.ok(userService.toAuthResponse(user));
+        try {
+            User user = userService.findByEmail(authentication.getName());
+            return ResponseEntity.ok(userService.toAuthResponse(user));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(401).build();
+        }
     }
 
     @PutMapping

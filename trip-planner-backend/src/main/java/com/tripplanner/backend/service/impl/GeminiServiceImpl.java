@@ -95,10 +95,7 @@ public class GeminiServiceImpl implements GeminiService {
                 return Collections.emptyList();
             }
 
-            // Clean JSON text (remove markdown blocks if present)
-            jsonText = jsonText.replaceAll("```json", "").replaceAll("```", "").trim();
-
-            List<Map<String, String>> rawSuggestions = objectMapper.readValue(jsonText, new TypeReference<List<Map<String, String>>>() {});
+            List<Map<String, String>> rawSuggestions = parseJsonList(jsonText);
             if (rawSuggestions == null) {
                 return Collections.emptyList();
             }
@@ -175,8 +172,7 @@ public class GeminiServiceImpl implements GeminiService {
                 return Collections.emptyList();
             }
 
-            jsonText = jsonText.replaceAll("```json", "").replaceAll("```", "").trim();
-            List<Map<String, String>> rawHotels = objectMapper.readValue(jsonText, new TypeReference<List<Map<String, String>>>() {});
+            List<Map<String, String>> rawHotels = parseJsonList(jsonText);
             if (rawHotels == null) return Collections.emptyList();
 
             List<Map<String, String>> validHotels = new ArrayList<>();
@@ -211,11 +207,154 @@ public class GeminiServiceImpl implements GeminiService {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("x-goog-api-key", apiKey);
-        return restTemplate.exchange(
-                GEMINI_URL.formatted(model),
-                HttpMethod.POST,
-                new HttpEntity<>(request, headers),
-                Map.class
-        ).getBody();
+
+        int maxAttempts = 3;
+        long backoffMillis = 1000;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return restTemplate.exchange(
+                        GEMINI_URL.formatted(model),
+                        HttpMethod.POST,
+                        new HttpEntity<>(request, headers),
+                        Map.class
+                ).getBody();
+            } catch (HttpStatusCodeException e) {
+                int status = e.getStatusCode().value();
+                boolean isRetryable = (status == 503 || status == 429 || status == 502 || status == 504 || e.getStatusCode().is5xxServerError());
+                if (isRetryable && attempt < maxAttempts) {
+                    log.warn("Gemini API call failed with HTTP {} {}. Retrying in {} ms (attempt {}/{})",
+                            status, e.getStatusText(), backoffMillis, attempt, maxAttempts);
+                    try {
+                        Thread.sleep(backoffMillis);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException("Interrupted during Gemini backoff", ie);
+                    }
+                    backoffMillis *= 2;
+                } else {
+                    throw e;
+                }
+            } catch (RestClientException e) {
+                if (attempt < maxAttempts) {
+                    log.warn("Gemini API call failed with {}. Retrying in {} ms (attempt {}/{})",
+                            e.getClass().getSimpleName(), backoffMillis, attempt, maxAttempts);
+                    try {
+                        Thread.sleep(backoffMillis);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException("Interrupted during Gemini backoff", ie);
+                    }
+                    backoffMillis *= 2;
+                } else {
+                    throw e;
+                }
+            }
+        }
+        return null;
+    }
+
+    private List<Map<String, String>> parseJsonList(String jsonText) {
+        if (jsonText == null || jsonText.isBlank()) {
+            return Collections.emptyList();
+        }
+
+        // Clean markdown blocks
+        jsonText = jsonText.replaceAll("(?s)```json\\s*", "")
+                           .replaceAll("(?s)```\\s*", "")
+                           .trim();
+
+        // 1. Try direct deserialization as List<Map<String, String>>
+        try {
+            List<Map<String, String>> list = objectMapper.readValue(jsonText, new TypeReference<List<Map<String, String>>>() {});
+            if (list != null && !list.isEmpty()) return list;
+        } catch (Exception e1) {
+            // Try alternative formats below
+        }
+
+        // 2. Try reading consecutive JSON objects (e.g. {...}{...}) using readValues
+        try {
+            Iterator<Map<String, String>> iter = objectMapper.readerFor(new TypeReference<Map<String, String>>() {})
+                    .readValues(jsonText);
+            List<Map<String, String>> consecutiveList = new ArrayList<>();
+            while (iter.hasNext()) {
+                consecutiveList.add(iter.next());
+            }
+            if (consecutiveList.size() > 1) {
+                return consecutiveList;
+            }
+            if (consecutiveList.size() == 1) {
+                // Check if the whole text was just one object or if there's more
+                // If it's a single object, let's verify if we should keep it or check wrapped maps
+            }
+        } catch (Exception e3) {
+            // ignore
+        }
+
+        // 3. Try parsing as List or Map (wrapped or single object)
+        try {
+            Object parsed = objectMapper.readValue(jsonText, Object.class);
+            if (parsed instanceof List) {
+                List<?> rawList = (List<?>) parsed;
+                List<Map<String, String>> result = new ArrayList<>();
+                for (Object obj : rawList) {
+                    if (obj instanceof Map) {
+                        Map<String, String> map = new HashMap<>();
+                        for (Map.Entry<?, ?> entry : ((Map<?, ?>) obj).entrySet()) {
+                            if (entry.getKey() != null && entry.getValue() != null) {
+                                map.put(String.valueOf(entry.getKey()), String.valueOf(entry.getValue()));
+                            }
+                        }
+                        result.add(map);
+                    }
+                }
+                return result;
+            } else if (parsed instanceof Map) {
+                Map<?, ?> map = (Map<?, ?>) parsed;
+                for (String key : List.of("itinerary", "attractions", "places", "days", "results", "data", "hotels")) {
+                    if (map.containsKey(key) && map.get(key) instanceof List) {
+                        List<?> rawList = (List<?>) map.get(key);
+                        List<Map<String, String>> result = new ArrayList<>();
+                        for (Object obj : rawList) {
+                            if (obj instanceof Map) {
+                                Map<String, String> itemMap = new HashMap<>();
+                                for (Map.Entry<?, ?> entry : ((Map<?, ?>) obj).entrySet()) {
+                                    if (entry.getKey() != null && entry.getValue() != null) {
+                                        itemMap.put(String.valueOf(entry.getKey()), String.valueOf(entry.getValue()));
+                                    }
+                                }
+                                result.add(itemMap);
+                            }
+                        }
+                        return result;
+                    }
+                }
+                Map<String, String> singleMap = new HashMap<>();
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    if (entry.getKey() != null && entry.getValue() != null) {
+                        singleMap.put(String.valueOf(entry.getKey()), String.valueOf(entry.getValue()));
+                    }
+                }
+                if (singleMap.containsKey("name") || singleMap.containsKey("day")) {
+                    return List.of(singleMap);
+                }
+            }
+        } catch (Exception e2) {
+            // ignore
+        }
+
+        // 4. Try wrapping consecutive objects in brackets if not already array
+        try {
+            String wrapped = jsonText.trim();
+            if (wrapped.startsWith("{") && wrapped.endsWith("}")) {
+                wrapped = "[" + wrapped.replaceAll("}\\s*\\{", "},{") + "]";
+                List<Map<String, String>> list = objectMapper.readValue(wrapped, new TypeReference<List<Map<String, String>>>() {});
+                if (list != null && !list.isEmpty()) return list;
+            }
+        } catch (Exception e4) {
+            log.warn("Failed to parse Gemini response as JSON list or objects: {}", e4.getMessage());
+        }
+
+        return Collections.emptyList();
     }
 }
