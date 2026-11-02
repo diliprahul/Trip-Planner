@@ -13,9 +13,11 @@ const Header = () => {
 
   const isActive = (path) => location.pathname === path;
 
-  useEffect(() => {
-    setImgError(false);
-  }, [user?.profilePictureUrl]);
+  const prevAvatarRef = useRef(user?.profilePictureUrl);
+  if (prevAvatarRef.current !== user?.profilePictureUrl) {
+    prevAvatarRef.current = user?.profilePictureUrl;
+    if (imgError) setImgError(false);
+  }
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -102,7 +104,7 @@ const Header = () => {
                 to="/register" 
                 className={`nav-link ${isActive("/register") ? "active" : ""}`}
                 onClick={() => setMobileMenuOpen(false)}
-                style={{ background: "#2563eb", color: "white", padding: "8px 16px", borderRadius: "8px" }}
+                style={{ background: "var(--brand-primary)", color: "white", padding: "8px 16px", borderRadius: "6px" }}
               >
                 Register
               </Link>

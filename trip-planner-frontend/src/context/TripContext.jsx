@@ -4,6 +4,7 @@ import { TripContext } from "./useTrip";
 export const TripProvider = ({ children }) => {
   const [tripRequest, setTripRequest] = useState(null);
   const [itinerary, setItinerary] = useState(null);
+  const [myTrips, setMyTrips] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -14,6 +15,8 @@ export const TripProvider = ({ children }) => {
         setTripRequest,
         itinerary,
         setItinerary,
+        myTrips,
+        setMyTrips,
         loading,
         setLoading,
         error,

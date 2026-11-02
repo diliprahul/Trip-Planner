@@ -66,7 +66,7 @@ const Itinerary = () => {
     }
 
     if (tripId) {
-      if (!itinerary || itinerary.id !== Number(tripId)) {
+      if (!itinerary || itinerary.id !== Number(tripId) || !itinerary.dayPlans || itinerary.dayPlans.length === 0) {
         const loadTrip = async () => {
           setFetching(true);
           try {
@@ -88,7 +88,7 @@ const Itinerary = () => {
 
   if (authLoading || fetching) {
     return (
-      <div style={{ padding: "100px 24px", textAlign: "center", color: "#64748b", flex: 1 }}>
+      <div style={{ padding: "100px 24px", textAlign: "center", color: "var(--text-secondary)", flex: 1 }}>
         Loading itinerary...
       </div>
     );
@@ -96,12 +96,12 @@ const Itinerary = () => {
 
   if (error) {
     return (
-      <div style={{ padding: "100px 24px", textAlign: "center", color: "#dc2626", flex: 1 }}>
+      <div style={{ padding: "100px 24px", textAlign: "center", color: "#991b1b", flex: 1 }}>
         <h2>Error Loading Itinerary</h2>
         <p>{error}</p>
         <button
           onClick={() => navigate("/my-trips")}
-          style={{ marginTop: "16px", background: "#2563eb", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer" }}
+          style={{ marginTop: "16px", background: "var(--brand-primary)", color: "white", border: "none", padding: "10px 20px", borderRadius: "6px", cursor: "pointer", fontWeight: "600" }}
         >
           Go to My Trips
         </button>
@@ -121,25 +121,45 @@ const Itinerary = () => {
   const validAttractions = (itinerary.dayPlans || []).filter((plan) =>
     hasCoordinates(plan.latitude, plan.longitude)
   );
+
   return (
-    <div style={{ background: "#f1f5f9", minHeight: "100vh", paddingBottom: "80px" }}>
+    <div style={{ background: "var(--bg-primary)", minHeight: "100vh", paddingBottom: "80px" }}>
       {/* HEADER */}
       <div
         style={{
-          background: "linear-gradient(135deg, #0f172a, #1e293b)",
+          position: "relative",
+          backgroundImage: `linear-gradient(rgba(37, 42, 36, 0.55), rgba(37, 42, 36, 0.75)), url('/images/iternary-page-hero.jpg')`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
           color: "white",
-          padding: "60px 24px",
+          padding: "70px 24px",
           textAlign: "center",
+          borderBottom: "1px solid var(--color-border)"
         }}
       >
-        <h1 style={{ fontSize: "36px", fontWeight: "800", marginBottom: "12px", letterSpacing: "-0.025em" }}>
-          {itinerary.origin} <span style={{ color: "#94a3b8", fontWeight: "300" }}>→</span> {itinerary.destination}
+        <span style={{
+          fontFamily: "var(--font-heading)",
+          fontSize: "11px",
+          fontWeight: "700",
+          letterSpacing: "1.5px",
+          textTransform: "uppercase",
+          color: "#E9E3D6",
+          background: "rgba(36, 75, 60, 0.85)",
+          padding: "4px 12px",
+          borderRadius: "4px",
+          display: "inline-block",
+          marginBottom: "12px"
+        }}>
+          Itinerary Overview
+        </span>
+        <h1 style={{ fontFamily: "var(--font-heading)", fontSize: "36px", fontWeight: "800", marginBottom: "12px", letterSpacing: "-0.02em", color: "#FFFFFF" }}>
+          {itinerary.origin} <span style={{ color: "#E9E3D6", fontWeight: "300" }}>→</span> {itinerary.destination}
         </h1>
-        <div style={{ display: "flex", justifyContent: "center", gap: "12px", fontSize: "16px" }}>
-          <span style={{ background: "rgba(255,255,255,0.1)", padding: "6px 16px", borderRadius: "99px" }}>
+        <div style={{ display: "flex", justifyContent: "center", gap: "12px", fontSize: "15px" }}>
+          <span style={{ background: "rgba(255,255,255,0.15)", padding: "6px 16px", borderRadius: "6px", fontWeight: "500" }}>
             {itinerary.startDate} to {itinerary.endDate}
           </span>
-          <span style={{ background: "rgba(255,255,255,0.1)", padding: "6px 16px", borderRadius: "99px" }}>
+          <span style={{ background: "rgba(255,255,255,0.15)", padding: "6px 16px", borderRadius: "6px", fontWeight: "500" }}>
             {itinerary.days} Days
           </span>
         </div>
@@ -148,7 +168,7 @@ const Itinerary = () => {
       <div style={{ maxWidth: "1000px", margin: "auto", padding: "0 20px" }}>
         
         {/* SECTION 1: CITY MAP */}
-        <div style={{ marginTop: "-40px", background: "white", borderRadius: "24px", overflow: "hidden", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)", border: "1px solid #e2e8f0" }}>
+        <div style={{ marginTop: "-32px", background: "var(--surface-primary)", borderRadius: "12px", overflow: "hidden", boxShadow: "0 4px 6px -1px rgba(37, 42, 36, 0.05)", border: "1px solid var(--color-border)" }}>
            <div style={{ height: "400px", width: "100%", zIndex: 1 }}>
               <MapContainer key={`${center[0]}-${center[1]}-${validAttractions.length}`} center={center} zoom={13} style={{ height: "100%", width: "100%" }}>
                 <TileLayer
@@ -170,8 +190,8 @@ const Itinerary = () => {
                 ))}
               </MapContainer>
            </div>
-           <div style={{ padding: "20px", textAlign: "center", borderTop: "1px solid #f1f5f9" }}>
-              <p style={{ color: "#64748b", fontSize: "14px", margin: 0 }}>
+           <div style={{ padding: "16px 20px", textAlign: "center", borderTop: "1px solid var(--color-border)", background: "var(--surface-secondary)" }}>
+              <p style={{ color: "var(--text-secondary)", fontSize: "13px", margin: 0 }}>
                 {validAttractions.length > 0
                   ? <>Showing <b>{validAttractions.length}</b> attraction pin{validAttractions.length === 1 ? "" : "s"} in <b>{itinerary.destination}</b>.</>
                   : <>No attraction coordinates are available yet. Run the authenticated coordinate backfill to add only verified locations.</>}
@@ -185,64 +205,65 @@ const Itinerary = () => {
         )}
 
         {/* SECTION 3: ITINERARY */}
-        <h2 style={{ marginTop: "64px", marginBottom: "32px", fontSize: "28px", color: "#0f172a" }}>
+        <h2 style={{ marginTop: "56px", marginBottom: "24px", fontSize: "24px", color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>
           Daily Itinerary
         </h2>
-        <div style={{ display: "grid", gap: "24px" }}>
+        <div style={{ display: "grid", gap: "20px" }}>
           {itinerary.dayPlans?.map((plan) => (
             <div
               key={plan.dayNumber}
               style={{
-                background: "white",
-                borderRadius: "20px",
+                background: "var(--surface-primary)",
+                borderRadius: "12px",
                 padding: "24px",
                 display: "flex",
                 gap: "24px",
                 alignItems: "flex-start",
-                boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
-                border: "1px solid #e2e8f0",
+                boxShadow: "0 1px 3px rgba(37, 42, 36, 0.04)",
+                border: "1px solid var(--color-border)",
               }}
             >
               <div style={{
-                background: "#3b82f6",
-                color: "white",
+                background: "var(--surface-secondary)",
+                color: "var(--brand-primary)",
                 minWidth: "60px",
                 height: "60px",
-                borderRadius: "16px",
+                borderRadius: "8px",
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                fontWeight: "bold"
+                fontWeight: "700",
+                border: "1px solid var(--color-border)"
               }}>
-                <span style={{ fontSize: "12px", opacity: 0.8 }}>DAY</span>
-                <span style={{ fontSize: "24px" }}>{plan.dayNumber}</span>
+                <span style={{ fontSize: "11px", color: "var(--text-secondary)", letterSpacing: "0.05em" }}>DAY</span>
+                <span style={{ fontSize: "22px", fontFamily: "var(--font-heading)" }}>{plan.dayNumber}</span>
               </div>
               
               <div style={{ flex: 1 }}>
-                <h3 style={{ margin: "0 0 8px", fontSize: "20px", color: "#1e293b" }}>{plan.placeName}</h3>
-                <p style={{ margin: "0 0 16px", color: "#64748b", lineHeight: "1.6" }}>{plan.description}</p>
+                <h3 style={{ margin: "0 0 8px", fontSize: "18px", color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>{plan.placeName}</h3>
+                <p style={{ margin: "0 0 16px", color: "var(--text-secondary)", lineHeight: "1.6", fontSize: "14px" }}>{plan.description}</p>
                 <button
                   onClick={() => open(plan.mapsUrl)}
                   style={{
-                    background: "#f1f5f9",
-                    color: "#334155",
-                    border: "1px solid #e2e8f0",
+                    background: "var(--surface-secondary)",
+                    color: "var(--text-primary)",
+                    border: "1px solid var(--color-border)",
                     padding: "8px 16px",
-                    borderRadius: "10px",
+                    borderRadius: "6px",
                     fontWeight: "600",
                     cursor: "pointer",
-                    fontSize: "14px",
-                    display: "flex",
+                    fontSize: "13px",
+                    display: "inline-flex",
                     alignItems: "center",
                     gap: "8px",
-                    transition: "all 0.2s"
+                    transition: "background-color 0.15s ease"
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "#e2e8f0";
+                    e.currentTarget.style.background = "#ded7c5";
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "#f1f5f9";
+                    e.currentTarget.style.background = "var(--surface-secondary)";
                   }}
                 >
                   Get Directions
@@ -253,12 +274,12 @@ const Itinerary = () => {
         </div>
 
         {/* SECTION 3: HOTELS */}
-        <h2 style={{ marginTop: "64px", marginBottom: "32px", fontSize: "28px", color: "#0f172a" }}>
+        <h2 style={{ marginTop: "56px", marginBottom: "24px", fontSize: "24px", color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>
           Where to Stay
         </h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "20px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "20px" }}>
           {(!itinerary.hotels || itinerary.hotels.length === 0) && (
-            <p style={{ color: "#64748b", margin: 0 }}>
+            <p style={{ color: "var(--text-secondary)", margin: 0 }}>
               No named accommodations were returned by OpenStreetMap for this area. Try generating again later.
             </p>
           )}
@@ -266,31 +287,31 @@ const Itinerary = () => {
             <div
               key={i}
               style={{
-                background: "white",
+                background: "var(--surface-primary)",
                 padding: "24px",
-                borderRadius: "20px",
-                border: "1px solid #e2e8f0",
-                boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+                borderRadius: "12px",
+                border: "1px solid var(--color-border)",
+                boxShadow: "0 1px 3px rgba(37, 42, 36, 0.04)",
                 display: "flex",
                 flexDirection: "column",
                 justifyContent: "space-between"
               }}
             >
               <div>
-                <h4 style={{ margin: "0 0 8px", fontSize: "18px", color: "#1e293b" }}>{hotel.name}</h4>
-                <p style={{ fontSize: "14px", color: "#64748b", margin: "0 0 20px" }}>{hotel.address || "Near attraction area"}</p>
+                <h4 style={{ margin: "0 0 8px", fontSize: "17px", color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>{hotel.name}</h4>
+                <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: "0 0 20px" }}>{hotel.address || "Near attraction area"}</p>
               </div>
               <button
                 onClick={() => open(hotel.searchUrl)}
                 style={{
-                  background: "#10b981",
+                  background: "var(--brand-primary)",
                   color: "white",
                   border: "none",
                   padding: "10px",
-                  borderRadius: "10px",
+                  borderRadius: "6px",
                   fontWeight: "600",
                   cursor: "pointer",
-                  fontSize: "14px"
+                  fontSize: "13px"
                 }}
               >
                 Get Directions
@@ -300,66 +321,70 @@ const Itinerary = () => {
         </div>
 
         {/* SECTION 4: BUDGET */}
-        <h2 style={{ marginTop: "64px", marginBottom: "8px", fontSize: "28px", color: "#0f172a" }}>
+        <h2 style={{ marginTop: "56px", marginBottom: "8px", fontSize: "24px", color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>
           Estimated Budget
         </h2>
-        <p style={{ color: "#64748b", marginBottom: "32px" }}>
+        <p style={{ color: "var(--text-secondary)", marginBottom: "24px", fontSize: "14px" }}>
           Estimates per traveler for {itinerary.days} days in {itinerary.destination}; they are planning ranges, not live hotel, transport, or ticket prices.
         </p>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "24px" }}>
-          {itinerary.budgetEstimates?.map((tier, i) => (
-            <div key={i} style={{
-              background: tier.budgetCategory === "Standard Budget" ? "#eff6ff" : "white",
-              padding: "32px",
-              borderRadius: "24px",
-              border: tier.budgetCategory === "Standard Budget" ? "2px solid #3b82f6" : "1px solid #e2e8f0",
-              boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.1)",
-              position: "relative"
-            }}>
-              {tier.budgetCategory === "Standard Budget" && (
-                <span style={{
-                  position: "absolute",
-                  top: "-12px",
-                  left: "50%",
-                  transform: "translateX(-50%)",
-                  background: "#3b82f6",
-                  color: "white",
-                  padding: "4px 16px",
-                  borderRadius: "99px",
-                  fontSize: "12px",
-                  fontWeight: "bold"
-                }}>RECOMMENDED</span>
-              )}
-              <h3 style={{ textAlign: "center", margin: "0 0 8px", fontSize: "24px", color: "#1e293b" }}>{tier.budgetCategory}</h3>
-              <p style={{ textAlign: "center", color: "#3b82f6", fontSize: "32px", fontWeight: "800", margin: "0 0 24px" }}>
-                ₹{tier.minTotal.toLocaleString()} - ₹{tier.maxTotal.toLocaleString()}
-              </p>
-              
-              <div style={{ display: "grid", gap: "12px", fontSize: "14px", borderTop: "1px solid #e2e8f0", paddingTop: "24px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "#64748b" }}>Accommodation</span>
-                  <span style={{ fontWeight: "600" }}>₹{tier.minAccommodation} - ₹{tier.maxAccommodation}</span>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "20px" }}>
+          {itinerary.budgetEstimates?.map((tier, i) => {
+            const isStandard = tier.budgetCategory === "Standard Budget";
+            return (
+              <div key={i} style={{
+                background: "var(--surface-primary)",
+                padding: "32px 24px",
+                borderRadius: "12px",
+                border: isStandard ? "2px solid var(--brand-primary)" : "1px solid var(--color-border)",
+                boxShadow: "0 1px 3px rgba(37, 42, 36, 0.04)",
+                position: "relative"
+              }}>
+                {isStandard && (
+                  <span style={{
+                    position: "absolute",
+                    top: "-12px",
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    background: "var(--brand-primary)",
+                    color: "white",
+                    padding: "4px 14px",
+                    borderRadius: "6px",
+                    fontSize: "11px",
+                    fontWeight: "700",
+                    letterSpacing: "0.05em"
+                  }}>RECOMMENDED</span>
+                )}
+                <h3 style={{ textAlign: "center", margin: "0 0 8px", fontSize: "20px", color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>{tier.budgetCategory}</h3>
+                <p style={{ textAlign: "center", color: "var(--brand-primary)", fontSize: "26px", fontWeight: "700", margin: "0 0 24px", fontFamily: "var(--font-heading)" }}>
+                  ₹{tier.minTotal.toLocaleString()} - ₹{tier.maxTotal.toLocaleString()}
+                </p>
+                
+                <div style={{ display: "grid", gap: "12px", fontSize: "14px", borderTop: "1px solid var(--color-border)", paddingTop: "20px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>Accommodation</span>
+                    <span style={{ fontWeight: "600" }}>₹{tier.minAccommodation} - ₹{tier.maxAccommodation}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>Food & Dining</span>
+                    <span style={{ fontWeight: "600" }}>₹{tier.minFood} - ₹{tier.maxFood}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>Transport</span>
+                    <span style={{ fontWeight: "600" }}>₹{tier.minTransport} - ₹{tier.maxTransport}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--text-secondary)" }}>Attractions</span>
+                    <span style={{ fontWeight: "600" }}>₹{tier.minAttractions} - ₹{tier.maxAttractions}</span>
+                  </div>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "#64748b" }}>Food & Dining</span>
-                  <span style={{ fontWeight: "600" }}>₹{tier.minFood} - ₹{tier.maxFood}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "#64748b" }}>Transport</span>
-                  <span style={{ fontWeight: "600" }}>₹{tier.minTransport} - ₹{tier.maxTransport}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "#64748b" }}>Attractions</span>
-                  <span style={{ fontWeight: "600" }}>₹{tier.minAttractions} - ₹{tier.maxAttractions}</span>
-                </div>
+                
+                <p style={{ marginTop: "20px", fontSize: "12px", color: "var(--text-secondary)", fontStyle: "italic" }}>
+                  Includes: {tier.assumptions}
+                </p>
               </div>
-              
-              <p style={{ marginTop: "24px", fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>
-                Includes: {tier.assumptions}
-              </p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

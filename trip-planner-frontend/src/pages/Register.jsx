@@ -60,97 +60,113 @@ const Register = () => {
   };
 
   return (
-    <div className="trip-form-wrapper">
-      <div className="trip-form-card">
-        <h1>Create Account</h1>
-        <p className="subtitle">Start planning and saving your personalized travel itineraries</p>
+    <div className="auth-editorial-wrapper">
+      <div className="auth-editorial-image">
+        <img
+          src="/images/Register-page-hero.jpg"
+          alt="Editorial travel inspiration"
+          onError={(e) => {
+            e.target.style.display = "none";
+          }}
+        />
+        <div className="auth-image-placeholder-content">
+          <span className="editorial-tag">TripPlanner Editorial</span>
+          <h2>Begin Your Next Adventure</h2>
+          <p>Join thousands of travelers crafting personalized itineraries with intelligent local insights.</p>
+        </div>
+      </div>
+      <div className="auth-editorial-form-panel">
+        <div className="auth-editorial-card">
+          <h1>Create Account</h1>
+          <p className="subtitle">Start planning and saving your personalized travel itineraries</p>
 
-        {error && <div style={{ color: "#dc2626", marginBottom: "16px", fontSize: "14px" }}>{error}</div>}
+          {error && <div className="form-error">{error}</div>}
 
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>Full Name</label>
-            <input
-              type="text"
-              name="name"
-              placeholder="e.g. John Doe"
-              value={formData.name}
-              onChange={handleChange}
-              required
-            />
-          </div>
+          <form onSubmit={handleSubmit}>
+            <div className="form-group">
+              <label>Full Name</label>
+              <input
+                type="text"
+                name="name"
+                placeholder="e.g. John Doe"
+                value={formData.name}
+                onChange={handleChange}
+                required
+              />
+            </div>
 
-          <div className="form-group">
-            <label>Email Address</label>
-            <input
-              type="email"
-              name="email"
-              placeholder="e.g. user@example.com"
-              value={formData.email}
-              onChange={handleChange}
-              autoComplete="email"
-              required
-            />
-          </div>
+            <div className="form-group">
+              <label>Email Address</label>
+              <input
+                type="email"
+                name="email"
+                placeholder="e.g. user@example.com"
+                value={formData.email}
+                onChange={handleChange}
+                autoComplete="email"
+                required
+              />
+            </div>
 
-          <div className="form-group">
-            <label>Current City (Optional)</label>
-            <input
-              type="text"
-              name="cityOfResidence"
-              placeholder="e.g. New York"
-              value={formData.cityOfResidence}
-              onChange={handleChange}
-              maxLength={100}
-            />
-          </div>
+            <div className="form-group">
+              <label>Current City (Optional)</label>
+              <input
+                type="text"
+                name="cityOfResidence"
+                placeholder="e.g. New York"
+                value={formData.cityOfResidence}
+                onChange={handleChange}
+                maxLength={100}
+              />
+            </div>
 
-          <div className="form-group">
-            <label>Favourite Place or City (Optional)</label>
-            <input
-              type="text"
-              name="favouritePlace"
-              placeholder="e.g. Paris"
-              value={formData.favouritePlace}
-              onChange={handleChange}
-              maxLength={100}
-            />
-          </div>
+            <div className="form-group">
+              <label>Favourite Place or City (Optional)</label>
+              <input
+                type="text"
+                name="favouritePlace"
+                placeholder="e.g. Paris"
+                value={formData.favouritePlace}
+                onChange={handleChange}
+                maxLength={100}
+              />
+            </div>
 
-          <div className="form-group">
-            <label>Password</label>
-            <input
-              type="password"
-              name="password"
-              placeholder="At least 6 characters"
-              value={formData.password}
-              onChange={handleChange}
-              autoComplete="new-password"
-              required
-            />
-          </div>
+            <div className="form-group">
+              <label>Password</label>
+              <input
+                type="password"
+                name="password"
+                placeholder="At least 6 characters"
+                value={formData.password}
+                onChange={handleChange}
+                autoComplete="new-password"
+                required
+              />
+            </div>
 
-          <div className="form-group">
-            <label>Confirm Password</label>
-            <input
-              type="password"
-              name="confirmPassword"
-              placeholder="Re-enter password"
-              value={formData.confirmPassword}
-              onChange={handleChange}
-              autoComplete="new-password"
-              required
-            />
-          </div>
+            <div className="form-group">
+              <label>Confirm Password</label>
+              <input
+                type="password"
+                name="confirmPassword"
+                placeholder="Re-enter password"
+                value={formData.confirmPassword}
+                onChange={handleChange}
+                autoComplete="new-password"
+                required
+              />
+            </div>
 
-          <button type="submit" disabled={submitting}>
-            {submitting ? "Creating Account..." : "Register"}
-          </button>
-        </form>
+            <button type="submit" disabled={submitting}>
+              {submitting ? "Creating Account..." : "Register"}
+            </button>
+          </form>
 
-        <p style={{ marginTop: "20px", fontSize: "14px", color: "#64748b" }}>
-          Already have an account? <Link to="/login" style={{ color: "#2563eb", fontWeight: "600" }}>Sign In</Link>
-        </p>
+          <p style={{ marginTop: "20px", fontSize: "14px", color: "var(--text-secondary)" }}>
+            Already have an account? <Link to="/login" className="auth-link">Sign In</Link>
+          </p>
+        </div>
       </div>
     </div>
   );

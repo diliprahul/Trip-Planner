@@ -17,7 +17,7 @@ const CATEGORIES = [
 ];
 
 const TripForm = () => {
-  const { setItinerary, setLoading, loading, setError } = useTrip();
+  const { setItinerary, setMyTrips, setLoading, loading, setError } = useTrip();
   const navigate = useNavigate();
 
   const [formData, setFormData] = useState({
@@ -81,6 +81,7 @@ const TripForm = () => {
       const createdTrip = await createTrip(payload);
       if (!createdTrip?.id) throw new Error("Trip ID missing");
 
+      setMyTrips(null);
       const itinerary = await generateItinerary(createdTrip.id);
       setItinerary(itinerary);
       navigate(`/result/${createdTrip.id}`);
