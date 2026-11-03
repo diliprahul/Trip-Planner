@@ -1,5 +1,5 @@
 package com.tripplanner.backend.controller;
-
+import org.springframework.security.core.context.SecurityContext;
 import com.tripplanner.backend.dto.*;
 import com.tripplanner.backend.entity.User;
 import com.tripplanner.backend.service.PasswordResetService;
@@ -14,6 +14,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -21,12 +22,12 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "http://localhost:*", allowCredentials = "true")
 public class AuthController {
 
     private final UserService userService;
     private final AuthenticationManager authenticationManager;
     private final PasswordResetService passwordResetService;
+    private final SecurityContextRepository securityContextRepository;
 
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(
@@ -39,29 +40,46 @@ public class AuthController {
                 new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
         );
 
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-        HttpSession session = httpRequest.getSession(true);
-        session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, SecurityContextHolder.getContext());
+        SecurityContext context = SecurityContextHolder.createEmptyContext();
+        context.setAuthentication(authentication);
+        SecurityContextHolder.setContext(context);
+
+        securityContextRepository.saveContext(
+                context,
+                httpRequest,
+                httpResponse
+        );
 
         return ResponseEntity.ok(response);
     }
 
     @PostMapping("/login")
-    public ResponseEntity<AuthResponse> login(
-            @RequestBody LoginRequest request,
-            HttpServletRequest httpRequest,
-            HttpServletResponse httpResponse) {
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
-        );
+public ResponseEntity<AuthResponse> login(
+        @RequestBody LoginRequest request,
+        HttpServletRequest httpRequest,
+        HttpServletResponse httpResponse) {
 
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-        HttpSession session = httpRequest.getSession(true);
-        session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, SecurityContextHolder.getContext());
+    Authentication authentication = authenticationManager.authenticate(
+            new UsernamePasswordAuthenticationToken(
+                    request.getEmail(),
+                    request.getPassword()
+            )
+    );
 
-        User user = userService.findByEmail(request.getEmail());
-        return ResponseEntity.ok(userService.toAuthResponse(user));
-    }
+    SecurityContext context = SecurityContextHolder.createEmptyContext();
+    context.setAuthentication(authentication);
+    SecurityContextHolder.setContext(context);
+
+    securityContextRepository.saveContext(
+            context,
+            httpRequest,
+            httpResponse
+    );
+
+    User user = userService.findByEmail(request.getEmail());
+
+    return ResponseEntity.ok(userService.toAuthResponse(user));
+}
 
     @PostMapping("/forgot-password")
     public ResponseEntity<Map<String, String>> forgotPassword(@RequestBody ForgotPasswordRequest request) {

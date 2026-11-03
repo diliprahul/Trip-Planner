@@ -403,4 +403,76 @@ class AuthAndTripSecurityTest {
         mockMvc.perform(get("/api/auth/me"))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test
+    void testRegistrationCreatesAuthenticatedSessionAndAuthMeSucceeds() throws Exception {
+        RegisterRequest regReq = new RegisterRequest();
+        regReq.setName("Reg User");
+        regReq.setEmail("regsession@example.com");
+        regReq.setPassword("password123");
+
+        MvcResult result = mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(regReq)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("regsession@example.com"))
+                .andReturn();
+
+        MockHttpSession session = (MockHttpSession) result.getRequest().getSession();
+        assertNotNull(session);
+
+        mockMvc.perform(get("/api/auth/me")
+                        .session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("regsession@example.com"));
+    }
+
+    @Test
+    void testEmailLoginCreatesAuthenticatedSessionAndLogoutInvalidates() throws Exception {
+        RegisterRequest regReq = new RegisterRequest();
+        regReq.setName("Login User");
+        regReq.setEmail("loginsession@example.com");
+        regReq.setPassword("password123");
+        userService.register(regReq);
+
+        LoginRequest loginReq = new LoginRequest();
+        loginReq.setEmail("loginsession@example.com");
+        loginReq.setPassword("password123");
+
+        MvcResult result = mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(loginReq)))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        MockHttpSession session = (MockHttpSession) result.getRequest().getSession();
+        assertNotNull(session);
+
+        mockMvc.perform(get("/api/auth/me")
+                        .session(session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("loginsession@example.com"));
+
+        // Logout
+        mockMvc.perform(post("/api/auth/logout")
+                        .session(session))
+                .andExpect(status().isOk());
+
+        // After logout, me should return 401
+        mockMvc.perform(get("/api/auth/me")
+                        .session(session))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void testUnauthenticatedRequestsReturn401() throws Exception {
+        mockMvc.perform(get("/api/auth/me"))
+                .andExpect(status().isUnauthorized());
+
+        mockMvc.perform(get("/api/auth/profile"))
+                .andExpect(status().isUnauthorized());
+
+        mockMvc.perform(get("/api/trips/my"))
+                .andExpect(status().isUnauthorized());
+    }
 }

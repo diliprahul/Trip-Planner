@@ -14,7 +14,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/auth/profile")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "http://localhost:*", allowCredentials = "true")
 public class ProfileController {
 
     private final UserService userService;
