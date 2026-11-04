@@ -22,19 +22,36 @@ public class WeatherServiceImpl implements WeatherService {
         this.restTemplate = restTemplate;
     }
 
-    @Autowired(required = false)
-    public WeatherServiceImpl(RestTemplate restTemplate, @Value("${weather.openweather.api-key:}") String apiKey) {
-        this.restTemplate = restTemplate;
-    }
-
     @Override
     public WeatherResponseDto getForecast(Double lat, Double lon, LocalDate startDate, LocalDate endDate) {
+        if (lat == null || lon == null || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+            return WeatherResponseDto.builder()
+                    .status(WeatherResponseDto.Status.API_ERROR)
+                    .message("Invalid coordinates provided for weather forecast.")
+                    .build();
+        }
+
+        if (startDate == null || endDate == null || startDate.isAfter(endDate)) {
+            return WeatherResponseDto.builder()
+                    .status(WeatherResponseDto.Status.API_ERROR)
+                    .message("Invalid travel dates provided.")
+                    .build();
+        }
+
         try {
-            // Using Open-Meteo Forecast API (supports up to 16 days daily forecast without API key)
-            String url = String.format("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max&forecast_days=16&timezone=auto", lat, lon);
+            // Using Open-Meteo Forecast API (supports up to 16 days daily forecast)
+            String url = String.format("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max&forecast_days=16&timezone=auto", lat, lon);
             Map<String, Object> response = restTemplate.getForObject(url, Map.class);
 
             if (response == null || !response.containsKey("daily")) {
+                // If trip dates are far in the future or daily is missing
+                LocalDate today = LocalDate.now();
+                if (startDate.isAfter(today.plusDays(16))) {
+                    return WeatherResponseDto.builder()
+                            .status(WeatherResponseDto.Status.NOT_AVAILABLE_YET)
+                            .message("Detailed weather forecasts are not available yet for your selected travel dates. Weather forecasts will become available closer to your trip.")
+                            .build();
+                }
                 return WeatherResponseDto.builder()
                         .status(WeatherResponseDto.Status.API_ERROR)
                         .message("Weather service is currently unreachable.")
@@ -45,7 +62,10 @@ public class WeatherServiceImpl implements WeatherService {
             List<String> times = (List<String>) daily.get("time");
             List<Number> maxTemps = (List<Number>) daily.get("temperature_2m_max");
             List<Number> minTemps = (List<Number>) daily.get("temperature_2m_min");
-            List<Number> weatherCodes = (List<Number>) daily.get("weathercode");
+            List<Number> weatherCodes = (List<Number>) daily.get("weather_code");
+            if (weatherCodes == null) {
+                weatherCodes = (List<Number>) daily.get("weathercode"); // Fallback
+            }
             List<Number> precipProbs = (List<Number>) daily.get("precipitation_probability_max");
 
             Map<LocalDate, Map<String, Object>> dateToData = new HashMap<>();

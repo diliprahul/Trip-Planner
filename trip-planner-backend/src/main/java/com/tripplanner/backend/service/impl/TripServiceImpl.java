@@ -120,9 +120,6 @@ public class TripServiceImpl implements TripService {
         if (trip.getLatitude() == null || trip.getLongitude() == null) {
 
             GeoLocation loc = geocodingService.geocodeCity(trip.getDestination());
-            if (!isUsableLocation(loc)) {
-                loc = geocodingService.geocodeCity(trip.getDestination() + ", India");
-            }
 
             if (!isUsableLocation(loc)) {
                 throw new org.springframework.web.server.ResponseStatusException(
@@ -210,8 +207,7 @@ public class TripServiceImpl implements TripService {
                                 )
                                 .latitude(h.getLatitude())
                                 .longitude(h.getLongitude())
-                                .build()
-                        )
+                                .build())
                         .toList();
 
         if (hotels.isEmpty()) {
@@ -225,7 +221,9 @@ public class TripServiceImpl implements TripService {
                             String address = hotel.getOrDefault("address", trip.getDestination());
                             GeoLocation location = locationOrNull(hotel.get("name"), address, trip.getDestination(), true);
                             return HotelSuggestion.builder().trip(trip).name(hotel.get("name").trim()).address(address)
-                                    .latitude(location.getLatitude()).longitude(location.getLongitude()).build();
+                                    .latitude(location != null ? location.getLatitude() : null)
+                                    .longitude(location != null ? location.getLongitude() : null)
+                                    .build();
                         })
                         .toList();
             } catch (Exception e) {
@@ -459,7 +457,7 @@ public class TripServiceImpl implements TripService {
         GeoLocation location = hotel
                 ? geocodingService.geocodeHotel(name, address, destination)
                 : geocodingService.geocodeAttraction(name, destination);
-        return isUsableLocation(location) ? location : new GeoLocation(null, null);
+        return isUsableLocation(location) ? location : null;
     }
 
     /**

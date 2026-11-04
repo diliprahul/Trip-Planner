@@ -89,3 +89,8 @@ export const getMyTrips = async () => {
 export const deleteTrip = async (tripId) => {
   await apiClient.delete(`/api/trips/${tripId}`);
 };
+
+export const backfillCoordinates = async (tripId) => {
+  const response = await apiClient.post(`/api/trips/${tripId}/coordinates/backfill`);
+  return response.data;
+};

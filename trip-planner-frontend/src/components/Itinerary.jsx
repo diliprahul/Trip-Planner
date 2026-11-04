@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTrip } from "../context/useTrip";
 import { useAuth } from "../context/useAuth";
-import { getTripById, generateItinerary } from "../api/tripApi";
+import { getTripById, generateItinerary, backfillCoordinates } from "../api/tripApi";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import WeatherForecast from "./WeatherForecast";
@@ -74,6 +74,15 @@ const Itinerary = () => {
             let data = await getTripById(tripId);
             if (!data.dayPlans || data.dayPlans.length === 0) {
               data = await generateItinerary(tripId);
+            }
+            const hasValidCoords = (data.dayPlans || []).some(p => hasCoordinates(p.latitude, p.longitude));
+            if (!hasValidCoords && data.dayPlans && data.dayPlans.length > 0) {
+              try {
+                await backfillCoordinates(tripId);
+                data = await getTripById(tripId);
+              } catch (backfillErr) {
+                console.warn("Automatic backfill attempt failed:", backfillErr);
+              }
             }
             setItinerary(data);
           } catch (err) {
@@ -206,7 +215,27 @@ const Itinerary = () => {
               <p style={{ color: "var(--text-secondary)", fontSize: "13px", margin: 0 }}>
                 {validAttractions.length > 0
                   ? <>Showing <b>{validAttractions.length}</b> attraction pin{validAttractions.length === 1 ? "" : "s"} in <b>{itinerary.destination}</b>.</>
-                  : <>No attraction coordinates are available yet. Run the authenticated coordinate backfill to add only verified locations.</>}
+                  : <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
+                      <span>No attraction coordinates are available yet. Run the authenticated coordinate backfill to add only verified locations.</span>
+                      <button
+                        onClick={async () => {
+                          try {
+                            setFetching(true);
+                            await backfillCoordinates(tripId);
+                            const updated = await getTripById(tripId);
+                            setItinerary(updated);
+                          } catch (e) {
+                            console.error(e);
+                            setError("Failed to backfill coordinates");
+                          } finally {
+                            setFetching(false);
+                          }
+                        }}
+                        style={{ background: "var(--brand-primary)", color: "white", border: "none", padding: "6px 14px", borderRadius: "4px", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}
+                      >
+                        Run Coordinate Backfill
+                      </button>
+                    </div>}
               </p>
            </div>
         </div>

@@ -263,20 +263,12 @@ public class OverpassServiceImpl implements OverpassService {
 
                         if (latVal == null || lonVal == null) continue;
 
-                        String imageUrl = null;
-                        if (tags.containsKey("wikimedia_commons")) {
-                            imageUrl =
-                                    "https://commons.wikimedia.org/wiki/Special:FilePath/"
-                                            + tags.get("wikimedia_commons");
-                        }
-
                         results.add(
                                 PlaceResult.builder()
                                         .name(name)
                                         .address(addressFrom(tags))
                                         .latitude(latVal)
                                         .longitude(lonVal)
-                                        .imageUrl(imageUrl)
                                         .tags(stringTags)
                                         .build()
                         );

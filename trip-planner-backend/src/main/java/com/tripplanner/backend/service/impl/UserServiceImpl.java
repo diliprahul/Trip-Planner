@@ -4,6 +4,7 @@ import com.tripplanner.backend.dto.AuthResponse;
 import com.tripplanner.backend.dto.RegisterRequest;
 import com.tripplanner.backend.entity.User;
 import com.tripplanner.backend.repository.UserRepository;
+import com.tripplanner.backend.service.S3Service;
 import com.tripplanner.backend.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.UUID;
+import org.springframework.core.env.Environment;
 
 @Service
 @RequiredArgsConstructor
@@ -24,9 +26,14 @@ public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final S3Service s3Service;
+    private final Environment env;
 
     @Value("${app.upload.dir:uploads}")
     private String uploadDir;
+
+    @Value("${app.backend.url:}")
+    private String backendUrl;
 
     @Override
     public AuthResponse register(RegisterRequest request) {
@@ -72,7 +79,17 @@ public class UserServiceImpl implements UserService {
     public AuthResponse toAuthResponse(User user) {
         String effectivePicture = null;
         if (user.getCustomPicture() != null && !user.getCustomPicture().isBlank()) {
-            effectivePicture = "/uploads/" + user.getCustomPicture();
+            if (s3Service.isS3Configured()) {
+                effectivePicture = s3Service.getFileUrl(user.getCustomPicture());
+            }
+            if (effectivePicture == null) {
+                String path = "/uploads/" + user.getCustomPicture();
+                if (backendUrl != null && !backendUrl.isBlank()) {
+                    effectivePicture = backendUrl.replaceAll("/+$", "") + path;
+                } else {
+                    effectivePicture = path;
+                }
+            }
         } else if (user.getGooglePictureUrl() != null && !user.getGooglePictureUrl().isBlank()) {
             effectivePicture = user.getGooglePictureUrl();
         }
@@ -103,7 +120,6 @@ public class UserServiceImpl implements UserService {
         }
         String normalizedEmail = email.trim().toLowerCase();
 
-        // 1. Check if user already exists with provider and providerId
         var existingOAuthUser = userRepository.findByProviderAndProviderId(provider, providerId);
         if (existingOAuthUser.isPresent()) {
             User user = existingOAuthUser.get();
@@ -122,7 +138,6 @@ public class UserServiceImpl implements UserService {
             return user;
         }
 
-        // 2. Check if a user exists with this email (e.g. local email/password account)
         var existingEmailUser = userRepository.findByEmail(normalizedEmail);
         if (existingEmailUser.isPresent()) {
             User user = existingEmailUser.get();
@@ -146,7 +161,6 @@ public class UserServiceImpl implements UserService {
             return user;
         }
 
-        // 3. Create new OAuth user
         User newUser = User.builder()
                 .name(name != null && !name.isBlank() ? name.trim() : normalizedEmail)
                 .email(normalizedEmail)
@@ -200,7 +214,6 @@ public class UserServiceImpl implements UserService {
             throw new IllegalArgumentException("Only JPEG, PNG, and WebP images are supported");
         }
 
-        // Validate actual decoded image content
         try {
             BufferedImage img = ImageIO.read(file.getInputStream());
             if (img == null) {
@@ -214,28 +227,46 @@ public class UserServiceImpl implements UserService {
         String oldCustomPicture = user.getCustomPicture();
 
         try {
-            Path uploadPath = Paths.get(uploadDir).toAbsolutePath().normalize();
-            if (!Files.exists(uploadPath)) {
-                Files.createDirectories(uploadPath);
-            }
+            String newFilename;
+            if (s3Service.isS3Configured()) {
+                newFilename = s3Service.uploadFile(file, "profile-pictures");
+            } else {
+                boolean isProd = false;
+                for (String profile : env.getActiveProfiles()) {
+                    if ("prod".equalsIgnoreCase(profile)) {
+                        isProd = true;
+                        break;
+                    }
+                }
+                if (isProd) {
+                    throw new IllegalStateException("S3 storage is not configured in production. Profile picture upload cannot fall back to local temporary filesystem.");
+                }
 
-            String newFilename = UUID.randomUUID().toString() + ext;
-            Path filePath = uploadPath.resolve(newFilename);
-            file.transferTo(filePath.toFile());
+                Path uploadPath = Paths.get(uploadDir).toAbsolutePath().normalize();
+                if (!Files.exists(uploadPath)) {
+                    Files.createDirectories(uploadPath);
+                }
+                newFilename = UUID.randomUUID().toString() + ext;
+                Path filePath = uploadPath.resolve(newFilename);
+                file.transferTo(filePath.toFile());
+            }
 
             user.setCustomPicture(newFilename);
             User savedUser = userRepository.save(user);
 
-            // Clean up old custom picture safely if no other user references it
             if (oldCustomPicture != null && !oldCustomPicture.isBlank()) {
                 try {
-                    long count = userRepository.countByCustomPicture(oldCustomPicture);
-                    if (count <= 0) {
-                        Path oldPath = uploadPath.resolve(oldCustomPicture);
-                        Files.deleteIfExists(oldPath);
+                    if (s3Service.isS3Configured() && !oldCustomPicture.startsWith("/")) {
+                        s3Service.deleteFile(oldCustomPicture);
+                    } else {
+                        long count = userRepository.countByCustomPicture(oldCustomPicture);
+                        if (count <= 0) {
+                            Path uploadPath = Paths.get(uploadDir).toAbsolutePath().normalize();
+                            Path oldPath = uploadPath.resolve(oldCustomPicture);
+                            Files.deleteIfExists(oldPath);
+                        }
                     }
                 } catch (Exception ignored) {
-                    // Non-fatal cleanup failure safeguard
                 }
             }
 
@@ -254,14 +285,17 @@ public class UserServiceImpl implements UserService {
 
         if (oldCustomPicture != null && !oldCustomPicture.isBlank()) {
             try {
-                Path uploadPath = Paths.get(uploadDir).toAbsolutePath().normalize();
-                long count = userRepository.countByCustomPicture(oldCustomPicture);
-                if (count <= 0) {
-                    Path oldPath = uploadPath.resolve(oldCustomPicture);
-                    Files.deleteIfExists(oldPath);
+                if (s3Service.isS3Configured() && !oldCustomPicture.startsWith("/")) {
+                    s3Service.deleteFile(oldCustomPicture);
+                } else {
+                    Path uploadPath = Paths.get(uploadDir).toAbsolutePath().normalize();
+                    long count = userRepository.countByCustomPicture(oldCustomPicture);
+                    if (count <= 0) {
+                        Path oldPath = uploadPath.resolve(oldCustomPicture);
+                        Files.deleteIfExists(oldPath);
+                    }
                 }
             } catch (Exception ignored) {
-                // Non-fatal cleanup failure safeguard
             }
         }
 

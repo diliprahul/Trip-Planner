@@ -9,19 +9,19 @@ export default defineConfig({
     allowedHosts: ['culture-shiftless-germless.ngrok-free.dev'],
     proxy: {
       '/api': {
-        target: 'http://localhost:8089',
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
       '/uploads': {
-        target: 'http://localhost:8089',
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
       '/oauth2': {
-        target: 'http://localhost:8089',
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
       '/login/oauth2': {
-        target: 'http://localhost:8089',
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
     },

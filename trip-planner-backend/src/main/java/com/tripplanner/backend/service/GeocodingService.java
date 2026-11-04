@@ -6,11 +6,13 @@ public interface GeocodingService {
     GeoLocation geocodeCity(String city);
 
     default GeoLocation geocodeAttraction(String name, String destination) {
-        return geocodeCity(name + ", " + destination + ", India");
+        String query = (name != null ? name : "") + (destination != null && !destination.isBlank() ? ", " + destination : "");
+        return geocodeCity(query);
     }
 
     default GeoLocation geocodeHotel(String name, String address, String destination) {
         String context = address == null || address.isBlank() ? destination : address + ", " + destination;
-        return geocodeCity(name + ", " + context + ", India");
+        String query = (name != null ? name : "") + ", " + context;
+        return geocodeCity(query);
     }
 }
