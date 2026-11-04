@@ -15,6 +15,7 @@ public class HotelDto {
     private Double latitude;
     private Double longitude;
 
+
     // Used when no hotels are available
     private String searchUrl;
 }

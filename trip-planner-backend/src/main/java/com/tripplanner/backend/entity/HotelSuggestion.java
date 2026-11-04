@@ -26,6 +26,8 @@ public class HotelSuggestion {
 
     private Double rating;
 
+
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "trip_id")
     private Trip trip;

@@ -16,8 +16,7 @@ public class DayPlanDto {
     private Double latitude;
     private Double longitude;
 
-    // Image (already present, kept)
-    private String imageUrl;
+
 
     // ✅ Google Maps redirect link
     private String mapsUrl;
