@@ -240,6 +240,27 @@ const Itinerary = () => {
            </div>
         </div>
 
+        <aside
+          aria-labelledby="location-accuracy-title"
+          style={{
+            marginTop: "12px",
+            padding: "16px 20px",
+            background: "var(--surface-primary)",
+            border: "1px solid var(--color-border)",
+            borderRadius: "8px",
+            color: "var(--text-secondary)",
+            lineHeight: "1.6",
+            fontSize: "14px",
+          }}
+        >
+          <h2 id="location-accuracy-title" style={{ margin: "0 0 4px", color: "var(--text-primary)", fontFamily: "var(--font-heading)", fontSize: "15px" }}>
+            Location Accuracy Notice
+          </h2>
+          <p style={{ margin: 0 }}>
+            Exact map locations may not be available for every attraction. Some map pins may indicate approximate locations or may be unavailable. Please verify the attraction&apos;s location before travelling.
+          </p>
+        </aside>
+
         {/* SECTION 2: WEATHER */}
         {itinerary.weatherResponse && (
           <WeatherForecast weatherResponse={itinerary.weatherResponse} />

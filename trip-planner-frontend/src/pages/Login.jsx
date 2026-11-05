@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/useAuth";
 import { forgotPassword, verifyResetOtp, resetPassword } from "../api/tripApi";
+import { validatePassword } from "../utils/validators";
 
 const Login = () => {
   const [formData, setFormData] = useState({ email: "", password: "" });
@@ -62,7 +63,7 @@ const Login = () => {
 
     try {
       await forgotPassword(resetEmail);
-      setSuccessMessage("If an account with that email exists, a password reset OTP has been sent.");
+      setSuccessMessage("Password reset OTP sent. Check your email.");
       setResetStep("verify");
     } catch (err) {
       setError(err.response?.data?.message || err.message || "Failed to request password reset");
@@ -97,8 +98,9 @@ const Login = () => {
     setError(null);
     setSuccessMessage(null);
 
-    if (newPassword.length < 6) {
-      setError("Password must be at least 6 characters");
+    const passwordError = validatePassword(newPassword);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
 

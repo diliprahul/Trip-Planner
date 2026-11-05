@@ -13,6 +13,16 @@ export const registerUser = async (data) => {
   return response.data;
 };
 
+export const verifyRegistrationOtp = async (email, otp) => {
+  const response = await apiClient.post("/api/auth/register/verify-otp", { email, otp });
+  return response.data;
+};
+
+export const resendRegistrationOtp = async (email) => {
+  const response = await apiClient.post("/api/auth/register/resend-otp", { email });
+  return response.data;
+};
+
 export const loginUser = async (data) => {
   const response = await apiClient.post("/api/auth/login", data);
   return response.data;
@@ -48,6 +58,15 @@ export const uploadProfilePicture = async (formData) => {
 
 export const deleteProfilePicture = async () => {
   const response = await apiClient.delete("/api/auth/profile/picture");
+  return response.data;
+};
+
+export const deleteAccount = async (password) => {
+  await apiClient.delete("/api/auth/account", { data: { password, confirmed: true } });
+};
+
+export const startGoogleAccountDeletionReauthentication = async () => {
+  const response = await apiClient.get("/api/auth/account/google-reauth");
   return response.data;
 };
 

@@ -55,3 +55,4 @@ overpass_*.txt
 # Runtime uploads
 trip-planner-backend/uploads/*
 !trip-planner-backend/uploads/.gitkeep
+.maven-user/

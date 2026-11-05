@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { getProfile, updateProfile, uploadProfilePicture, deleteProfilePicture } from "../api/tripApi";
+import { getProfile, updateProfile, uploadProfilePicture, deleteProfilePicture, deleteAccount, startGoogleAccountDeletionReauthentication } from "../api/tripApi";
 import { useAuth } from "../context/useAuth";
 
 const Profile = () => {
@@ -17,8 +17,10 @@ const Profile = () => {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [imgError, setImgError] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [googleDeletionReady, setGoogleDeletionReady] = useState(false);
 
-  const { isAuthenticated, fetchCurrentUser } = useAuth();
+  const { isAuthenticated, fetchCurrentUser, logout } = useAuth();
   const navigate = useNavigate();
 
   const effectiveAvatar = previewUrl || profile?.profilePictureUrl;
@@ -61,6 +63,15 @@ const Profile = () => {
 
     loadProfile();
   }, [isAuthenticated, navigate]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("googleReauthenticated") === "true") {
+      setGoogleDeletionReady(true);
+      setSuccess("Google identity verified. Confirm account deletion to continue.");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   const handleStartEditing = () => {
     setError(null);
@@ -171,6 +182,49 @@ const Profile = () => {
     } finally {
       setUploadingPic(false);
     }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!window.confirm("Delete your account and all saved trips permanently? This cannot be undone.")) return;
+    if (profile?.provider?.toUpperCase() === "GOOGLE") {
+      setError(null); setSuccess(null);
+      try {
+        setDeletingAccount(true);
+        const { authorizationUrl } = await startGoogleAccountDeletionReauthentication();
+        const apiBase = import.meta.env.VITE_API_BASE_URL || "";
+        window.location.assign(`${apiBase}${authorizationUrl}`);
+      } catch (err) {
+        setError(err.response?.data?.message || "Google reauthentication could not be started. Your account has not been deleted.");
+        setDeletingAccount(false);
+      }
+      return;
+    }
+    const password = window.prompt("Enter your current password to continue:");
+    if (password === null) return;
+    if (!password) { setError("Enter your current password to delete your account."); return; }
+    if (!window.confirm("Final confirmation: permanently delete your Trip Planner account?")) return;
+    setError(null); setSuccess(null);
+    try {
+      setDeletingAccount(true);
+      await deleteAccount(password);
+      await logout();
+      navigate("/login?message=account-deleted", { replace: true });
+    } catch (err) {
+      setError(err.response?.data?.message || "Account deletion failed. Your account has not been deleted.");
+    } finally { setDeletingAccount(false); }
+  };
+
+  const handleConfirmGoogleAccountDeletion = async () => {
+    if (!window.confirm("Final confirmation: permanently delete your Trip Planner account?")) return;
+    setError(null); setSuccess(null);
+    try {
+      setDeletingAccount(true);
+      await deleteAccount();
+      await logout();
+      navigate("/login?message=account-deleted", { replace: true });
+    } catch (err) {
+      setError(err.response?.data?.message || "Account deletion failed. Your account has not been deleted.");
+    } finally { setDeletingAccount(false); }
   };
 
   if (loading) {
@@ -442,6 +496,15 @@ const Profile = () => {
             </form>
           )}
         </div>
+        <section className="delete-account-section" aria-labelledby="delete-account-title">
+          <div>
+            <h2 id="delete-account-title">Delete Account</h2>
+            <p>Permanently delete your Trip Planner account and associated personal data. This action cannot be undone.</p>
+          </div>
+          <button type="button" className="delete-account-button" onClick={googleDeletionReady ? handleConfirmGoogleAccountDeletion : handleDeleteAccount} disabled={deletingAccount}>
+            {deletingAccount ? "Deleting Account..." : googleDeletionReady ? "Confirm Account Deletion" : profile?.provider?.toUpperCase() === "GOOGLE" ? "Continue with Google to Delete Account" : "Delete My Account"}
+          </button>
+        </section>
       </div>
     </div>
   );

@@ -1,46 +1,21 @@
 import { useEffect } from "react";
 
+const sections = [
+  ["registration", "Information collected during registration", "For local registration, TripPlanner collects your name, email address, and password. You may also provide your current city and favourite place or city. We use your email address to send the registration verification code and, when requested, password-reset codes."],
+  ["profile", "Account and profile information", "Your account record includes your name, email address, sign-in provider, account creation date, and any optional profile details you save. If you sign in with Google, the application receives the Google account information used for sign-in, including the verified email address, name, provider identifier, and profile picture URL when supplied by Google. A custom profile picture is stored when you upload one."],
+  ["use", "How personal information is used", "We use account and profile information to register and identify your account, show your profile, maintain your sign-in session, provide password recovery, and associate saved trips with you. Optional city and favourite-place fields appear in your profile; they are not required to create an account."],
+  ["authentication", "Authentication and account security", "Local passwords are stored in hashed form. Registration and password-reset verification codes are stored in hashed form while they are active. The application uses an authenticated server session for access to account, profile, and trip endpoints. These measures do not remove the need for you to protect your password, email account, and verification codes."],
+  ["trip-data", "Trip and itinerary data storage", "When you create a trip, TripPlanner stores the origin, destination, dates, selected categories, and location coordinates. It also stores generated itinerary items and hotel suggestions for saved trips. Weather information is retrieved when a trip is viewed or generated and is not represented in the trip data model as a separately saved weather record."],
+  ["third-parties", "Third-party services and integrations", "TripPlanner uses Google for optional sign-in. It uses external providers for AI-assisted itinerary generation, geocoding, places and hotel suggestions, weather information, and map links. Trip location details and place names may be sent to the relevant provider to supply those features. If a custom profile picture is uploaded, it may be stored in an Amazon S3 bucket when S3 storage is configured; otherwise, the application's local upload storage is used outside production. External providers handle data under their own policies."],
+  ["retention", "Data retention and deletion", "Account and saved-trip information remains in the application database unless changed or deleted through available features. You can delete a saved trip from the application; its associated itinerary and hotel-suggestion records are deleted with it. You can remove a custom profile picture, which removes the stored picture from the configured storage when possible. The application does not currently provide an account-deletion feature, so contact support if you have a request about your account data."],
+  ["protection", "Data protection practices", "Access to profile and trip endpoints requires an authenticated account, and trip operations check that the trip belongs to the signed-in user. Profile image uploads are limited by type and size checks. No security measure can guarantee absolute protection, so please use a unique password and keep your account credentials private."],
+  ["choices", "Your rights and privacy choices", "You can view and update your available profile information, remove a custom profile picture, delete saved trips, sign out, and choose not to provide optional profile fields. For questions or requests concerning information that cannot be changed through the application, contact us using the details below."],
+  ["updates", "Policy updates", "We may update this policy when the application or its data practices change. The current revision date is shown on this page."],
+];
+
 const PrivacyPolicy = () => {
-  useEffect(() => {
-    document.title = "Privacy Policy | TripPlanner";
-  }, []);
-
-  return (
-    <div className="legal-page">
-      <div className="legal-container">
-        <h1>Privacy Policy</h1>
-        <p className="legal-updated">Last updated: October 2026</p>
-
-        <section>
-          <h2>1. Information We Process</h2>
-          <p>
-            TripPlanner is a travel itinerary planning application. When you use our service, we process the origin, destination, travel dates, and category preferences you enter to generate structured travel plans, weather forecasts, and cost estimations.
-          </p>
-        </section>
-
-        <section>
-          <h2>2. How We Use Data</h2>
-          <p>
-            The information provided is transmitted solely to retrieve geographic coordinates, local weather conditions, point-of-interest suggestions, and accommodations required to assemble your personalized itinerary. We do not sell or share your personal trip parameters with third-party advertisers.
-          </p>
-        </section>
-
-        <section>
-          <h2>3. Data Retention</h2>
-          <p>
-            Trip details and generated itineraries are maintained temporarily within active session storage to facilitate your planning workflow.
-          </p>
-        </section>
-
-        <section>
-          <h2>4. Contact</h2>
-          <p>
-            If you have questions regarding this privacy policy, please reach out through official application support channels.
-          </p>
-        </section>
-      </div>
-    </div>
-  );
+  useEffect(() => { document.title = "Privacy Policy | TripPlanner"; }, []);
+  return <div className="legal-page"><article className="legal-layout" aria-labelledby="legal-title"><header className="legal-header"><p className="legal-eyebrow">TripPlanner legal</p><h1 id="legal-title">Privacy Policy</h1><p className="legal-intro">How TripPlanner handles the account and travel-planning information used by the application.</p><p className="legal-updated">Last updated: November 5, 2026</p></header><nav className="legal-toc" aria-label="Table of contents"><p>On this page</p><ol>{sections.map(([id, title], index) => <li key={id}><a href={`#${id}`}>{index + 1}. {title}</a></li>)}</ol></nav><div className="legal-content">{sections.map(([id, title, body], index) => <section id={id} key={id} className="legal-section"><h2><span>{String(index + 1).padStart(2, "0")}</span>{title}</h2><p>{body}</p></section>)}<section id="contact" className="legal-contact"><h2>Need help?</h2><p>For questions about our Terms &amp; Conditions or Privacy Policy, contact our support team.</p><p>Email: <a href="mailto:tripplanner738@gmail.com">tripplanner738@gmail.com</a></p></section></div></article></div>;
 };
 
 export default PrivacyPolicy;

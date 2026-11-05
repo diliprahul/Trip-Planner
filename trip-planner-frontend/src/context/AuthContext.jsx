@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useState, useEffect } from "react";
-import { getCurrentUser, loginUser, logoutUser, registerUser } from "../api/tripApi";
+import { getCurrentUser, loginUser, logoutUser, registerUser, verifyRegistrationOtp } from "../api/tripApi";
 
 export const AuthContext = createContext(null);
 
@@ -36,7 +36,11 @@ export const AuthProvider = ({ children }) => {
   };
 
   const register = async (userData) => {
-    const data = await registerUser(userData);
+    return registerUser(userData);
+  };
+
+  const verifyRegistration = async (email, otp) => {
+    const data = await verifyRegistrationOtp(email, otp);
     setUser(data);
     return data;
   };
@@ -57,6 +61,7 @@ export const AuthProvider = ({ children }) => {
         loading,
         login,
         register,
+        verifyRegistration,
         logout,
         fetchCurrentUser,
       }}
