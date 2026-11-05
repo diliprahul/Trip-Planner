@@ -4,13 +4,22 @@ import com.tripplanner.backend.dto.AuthResponse;
 import com.tripplanner.backend.dto.RegisterRequest;
 import com.tripplanner.backend.entity.User;
 import com.tripplanner.backend.repository.UserRepository;
+import com.tripplanner.backend.repository.TripRepository;
+import com.tripplanner.backend.repository.DayPlanRepository;
+import com.tripplanner.backend.repository.HotelSuggestionRepository;
+import com.tripplanner.backend.repository.PasswordResetTokenRepository;
+import com.tripplanner.backend.repository.PendingRegistrationRepository;
+import com.tripplanner.backend.entity.Trip;
 import com.tripplanner.backend.service.S3Service;
 import com.tripplanner.backend.service.UserService;
+import com.tripplanner.backend.service.IncorrectPasswordException;
+import com.tripplanner.backend.util.PasswordValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -25,6 +34,11 @@ import org.springframework.core.env.Environment;
 public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
+    private final TripRepository tripRepository;
+    private final DayPlanRepository dayPlanRepository;
+    private final HotelSuggestionRepository hotelSuggestionRepository;
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
+    private final PendingRegistrationRepository pendingRegistrationRepository;
     private final PasswordEncoder passwordEncoder;
     private final S3Service s3Service;
     private final Environment env;
@@ -40,8 +54,8 @@ public class UserServiceImpl implements UserService {
         if (request.getEmail() == null || request.getEmail().isBlank()) {
             throw new IllegalArgumentException("Email is required");
         }
-        if (request.getPassword() == null || request.getPassword().length() < 6) {
-            throw new IllegalArgumentException("Password must be at least 6 characters");
+        if (!PasswordValidator.isValid(request.getPassword())) {
+            throw new IllegalArgumentException(PasswordValidator.MESSAGE);
         }
         if (request.getName() == null || request.getName().isBlank()) {
             throw new IllegalArgumentException("Name is required");
@@ -300,5 +314,53 @@ public class UserServiceImpl implements UserService {
         }
 
         return savedUser;
+    }
+
+    @Override
+    @Transactional
+    public void deleteLocalAccount(String email, String currentPassword) {
+        User user = findByEmail(email);
+        if (!"LOCAL".equalsIgnoreCase(user.getProvider())) {
+            throw new IllegalStateException("Google accounts must reauthenticate with Google before account deletion.");
+        }
+        if (currentPassword == null || currentPassword.isBlank() || !passwordEncoder.matches(currentPassword, user.getPassword())) {
+            throw new IncorrectPasswordException();
+        }
+
+        deleteAccountData(user);
+    }
+
+    @Override
+    @Transactional
+    public void deleteGoogleAccount(String email) {
+        User user = findByEmail(email);
+        if (!"GOOGLE".equalsIgnoreCase(user.getProvider())) {
+            throw new IllegalStateException("Google reauthentication is only available for Google accounts.");
+        }
+        deleteAccountData(user);
+    }
+
+    private void deleteAccountData(User user) {
+        String profilePicture = user.getCustomPicture();
+        for (Trip trip : tripRepository.findByUser(user)) {
+            dayPlanRepository.deleteByTrip(trip);
+            hotelSuggestionRepository.deleteByTrip(trip);
+            tripRepository.delete(trip);
+        }
+        passwordResetTokenRepository.deleteByEmail(user.getEmail());
+        pendingRegistrationRepository.deleteByEmail(user.getEmail());
+        userRepository.delete(user);
+
+        if (profilePicture != null && !profilePicture.isBlank()) {
+            try {
+                if (s3Service.isS3Configured() && !profilePicture.startsWith("/")) {
+                    s3Service.deleteFile(profilePicture);
+                } else if (userRepository.countByCustomPicture(profilePicture) == 0) {
+                    Files.deleteIfExists(Paths.get(uploadDir).toAbsolutePath().normalize().resolve(profilePicture));
+                }
+            } catch (Exception ignored) {
+                // Database deletion must not be rolled back because storage cleanup failed.
+            }
+        }
     }
 }

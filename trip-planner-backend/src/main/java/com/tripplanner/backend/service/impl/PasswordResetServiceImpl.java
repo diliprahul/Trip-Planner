@@ -5,6 +5,8 @@ import com.tripplanner.backend.entity.User;
 import com.tripplanner.backend.repository.PasswordResetTokenRepository;
 import com.tripplanner.backend.repository.UserRepository;
 import com.tripplanner.backend.service.PasswordResetService;
+import com.tripplanner.backend.service.PasswordResetRequestResult;
+import com.tripplanner.backend.util.PasswordValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.mail.SimpleMailMessage;
@@ -15,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
+import java.util.Locale;
 import java.util.Optional;
 
 @Slf4j
@@ -34,23 +37,21 @@ public class PasswordResetServiceImpl implements PasswordResetService {
 
     @Override
     @Transactional
-    public void requestPasswordReset(String email) {
+    public PasswordResetRequestResult requestPasswordReset(String email) {
         if (email == null || email.isBlank()) {
-            return;
+            return PasswordResetRequestResult.EMAIL_NOT_FOUND;
         }
-        String normalizedEmail = email.trim().toLowerCase();
+        String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
         Optional<User> userOpt = userRepository.findByEmail(normalizedEmail);
         if (userOpt.isEmpty()) {
-            // Generic response behavior: return silently without error to prevent email enumeration
-            log.info("Password reset requested for unregistered email: {}", normalizedEmail);
-            return;
+            return PasswordResetRequestResult.EMAIL_NOT_FOUND;
         }
 
         User user = userOpt.get();
         // Do not allow Google-only accounts to reset local password unless supported
         if (user.getProvider() != null && !"LOCAL".equalsIgnoreCase(user.getProvider())) {
-            log.warn("Password reset attempted for non-local account: {} (provider: {})", normalizedEmail, user.getProvider());
-            return;
+            log.warn("Password reset attempted for non-local account: {}", normalizedEmail);
+            return PasswordResetRequestResult.UNSUPPORTED_ACCOUNT;
         }
 
         // Check for existing token & resend cooldown
@@ -58,10 +59,8 @@ public class PasswordResetServiceImpl implements PasswordResetService {
         if (existingTokenOpt.isPresent()) {
             PasswordResetToken existingToken = existingTokenOpt.get();
             if (existingToken.getCreatedAt().plusSeconds(RESEND_COOLDOWN_SECONDS).isAfter(LocalDateTime.now())) {
-                log.info("Password reset requested too quickly for email: {}", normalizedEmail);
-                return; // Cooldown active, fail silently for security
+                return PasswordResetRequestResult.COOLDOWN_ACTIVE;
             }
-            passwordResetTokenRepository.deleteByEmail(normalizedEmail);
         }
 
         // Generate 6-digit secure OTP
@@ -76,10 +75,14 @@ public class PasswordResetServiceImpl implements PasswordResetService {
                 .attempts(0)
                 .build();
 
-        passwordResetTokenRepository.save(resetToken);
+        if (!sendOtpEmail(normalizedEmail, rawOtp)) {
+            return PasswordResetRequestResult.DELIVERY_FAILED;
+        }
 
-        // Send Email
-        sendOtpEmail(normalizedEmail, rawOtp);
+        // Replace an older token only after SMTP accepts the new message.
+        existingTokenOpt.ifPresent(passwordResetTokenRepository::delete);
+        passwordResetTokenRepository.save(resetToken);
+        return PasswordResetRequestResult.SENT;
     }
 
     @Override
@@ -88,7 +91,7 @@ public class PasswordResetServiceImpl implements PasswordResetService {
         if (email == null || otp == null) {
             return false;
         }
-        String normalizedEmail = email.trim().toLowerCase();
+        String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
         Optional<PasswordResetToken> tokenOpt = passwordResetTokenRepository.findByEmail(normalizedEmail);
         if (tokenOpt.isEmpty()) {
             return false;
@@ -107,7 +110,11 @@ public class PasswordResetServiceImpl implements PasswordResetService {
 
         if (!passwordEncoder.matches(otp, token.getOtpHash())) {
             token.setAttempts(token.getAttempts() + 1);
-            passwordResetTokenRepository.save(token);
+            if (token.getAttempts() >= MAX_ATTEMPTS) {
+                passwordResetTokenRepository.delete(token);
+            } else {
+                passwordResetTokenRepository.save(token);
+            }
             return false;
         }
 
@@ -120,11 +127,11 @@ public class PasswordResetServiceImpl implements PasswordResetService {
         if (email == null || otp == null || newPassword == null) {
             throw new IllegalArgumentException("Invalid password reset parameters");
         }
-        if (newPassword.length() < 6) {
-            throw new IllegalArgumentException("Password must be at least 6 characters");
+        if (!PasswordValidator.isValid(newPassword)) {
+            throw new IllegalArgumentException(PasswordValidator.MESSAGE);
         }
 
-        String normalizedEmail = email.trim().toLowerCase();
+        String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
         Optional<PasswordResetToken> tokenOpt = passwordResetTokenRepository.findByEmail(normalizedEmail);
         if (tokenOpt.isEmpty()) {
             throw new IllegalStateException("Invalid or expired password reset request");
@@ -143,7 +150,11 @@ public class PasswordResetServiceImpl implements PasswordResetService {
 
         if (!passwordEncoder.matches(otp, token.getOtpHash())) {
             token.setAttempts(token.getAttempts() + 1);
-            passwordResetTokenRepository.save(token);
+            if (token.getAttempts() >= MAX_ATTEMPTS) {
+                passwordResetTokenRepository.delete(token);
+            } else {
+                passwordResetTokenRepository.save(token);
+            }
             throw new IllegalArgumentException("Invalid OTP");
         }
 
@@ -162,10 +173,10 @@ public class PasswordResetServiceImpl implements PasswordResetService {
         log.info("Password successfully reset for user: {}", normalizedEmail);
     }
 
-    private void sendOtpEmail(String email, String otp) {
+    private boolean sendOtpEmail(String email, String otp) {
         if (javaMailSender.isEmpty()) {
-            log.warn("JavaMailSender is not configured. Password reset email cannot be sent for {}", email);
-            return;
+            log.error("JavaMailSender is not configured; cannot send password reset email to {}", email);
+            return false;
         }
         try {
             SimpleMailMessage message = new SimpleMailMessage();
@@ -174,8 +185,10 @@ public class PasswordResetServiceImpl implements PasswordResetService {
             message.setText("Your TripPlanner password reset verification code is: " + otp + "\nThis code will expire in " + OTP_EXPIRY_MINUTES + " minutes.\nIf you did not request this, please ignore this email.");
             javaMailSender.get().send(message);
             log.info("Password reset OTP email sent successfully to {}", email);
-        } catch (Exception e) {
-            log.error("Failed to send password reset OTP email to {}: {}", email, e.getMessage());
+            return true;
+        } catch (org.springframework.mail.MailException e) {
+            log.error("SMTP failed to accept password reset email for {}", email);
+            return false;
         }
     }
 }

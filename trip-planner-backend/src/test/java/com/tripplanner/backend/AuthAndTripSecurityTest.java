@@ -4,21 +4,26 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tripplanner.backend.dto.CreateTripRequest;
 import com.tripplanner.backend.dto.LoginRequest;
 import com.tripplanner.backend.dto.RegisterRequest;
+import com.tripplanner.backend.dto.RegistrationOtpRequest;
 import com.tripplanner.backend.entity.Trip;
 import com.tripplanner.backend.entity.User;
 import com.tripplanner.backend.repository.DayPlanRepository;
 import com.tripplanner.backend.repository.HotelSuggestionRepository;
 import com.tripplanner.backend.repository.TripRepository;
 import com.tripplanner.backend.repository.UserRepository;
+import com.tripplanner.backend.repository.PendingRegistrationRepository;
 import com.tripplanner.backend.service.UserService;
 import com.tripplanner.backend.service.TripService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -32,16 +37,25 @@ import static org.springframework.security.test.web.servlet.response.SecurityMoc
 import static org.springframework.security.test.web.servlet.response.SecurityMockMvcResultMatchers.unauthenticated;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentCaptor.forClass;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 class AuthAndTripSecurityTest {
+
+    @MockBean
+    private JavaMailSender javaMailSender;
 
     @Autowired
     private MockMvc mockMvc;
 
     @Autowired
     private UserRepository userRepository;
+    @Autowired private PendingRegistrationRepository pendingRegistrationRepository;
 
     @Autowired
     private TripRepository tripRepository;
@@ -69,10 +83,31 @@ class AuthAndTripSecurityTest {
 
     @BeforeEach
     void setUp() {
+        pendingRegistrationRepository.deleteAll();
+        doNothing().when(javaMailSender).send(any(SimpleMailMessage.class));
+        reset(javaMailSender);
+        doNothing().when(javaMailSender).send(any(SimpleMailMessage.class));
         hotelSuggestionRepository.deleteAll();
         dayPlanRepository.deleteAll();
         tripRepository.deleteAll();
         userRepository.deleteAll();
+    }
+
+    private MvcResult registerAndVerify(RegisterRequest request) throws Exception {
+        reset(javaMailSender);
+        doNothing().when(javaMailSender).send(any(SimpleMailMessage.class));
+        mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request))).andExpect(status().isOk());
+        var captor = forClass(SimpleMailMessage.class);
+        verify(javaMailSender).send(captor.capture());
+        String body = captor.getValue().getText();
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?<!\\d)(\\d{6})(?!\\d)").matcher(body);
+        assertTrue(matcher.find(), "Registration email should contain its generated OTP");
+        RegistrationOtpRequest otpRequest = new RegistrationOtpRequest();
+        otpRequest.setEmail(request.getEmail());
+        otpRequest.setOtp(matcher.group(1));
+        return mockMvc.perform(post("/api/auth/register/verify-otp").contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(otpRequest))).andExpect(status().isOk()).andReturn();
     }
 
     @Test
@@ -96,9 +131,8 @@ class AuthAndTripSecurityTest {
         regReq.setEmail("alice@example.com");
         regReq.setPassword("secret123");
 
-        mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(regReq)))
+        MvcResult registrationResult = registerAndVerify(regReq);
+        mockMvc.perform(get("/api/auth/me").session((MockHttpSession) registrationResult.getRequest().getSession()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value("alice@example.com"))
                 .andExpect(jsonPath("$.name").value("Alice"));
@@ -112,12 +146,11 @@ class AuthAndTripSecurityTest {
         dupReq.setEmail("alice@example.com");
         dupReq.setPassword("other123");
 
-        Exception ex = assertThrows(Exception.class, () -> {
-            mockMvc.perform(post("/api/auth/register")
+        mockMvc.perform(post("/api/auth/register")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(dupReq)));
-        });
-        assertInstanceOf(IllegalStateException.class, ex.getCause());
+                            .content(objectMapper.writeValueAsString(dupReq)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("EMAIL_ALREADY_EXISTS"));
 
         // 5. Invalid password rejection
         LoginRequest badLogin = new LoginRequest();
@@ -194,10 +227,7 @@ class AuthAndTripSecurityTest {
         bobReg.setEmail("bob@example.com");
         bobReg.setPassword("bobpass123");
 
-        mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(bobReg)))
-                .andExpect(status().isOk());
+        registerAndVerify(bobReg);
 
         LoginRequest bobLogin = new LoginRequest();
         bobLogin.setEmail("bob@example.com");
@@ -299,10 +329,7 @@ class AuthAndTripSecurityTest {
         regReq.setEmail("alice@example.com");
         regReq.setPassword("secret123");
 
-        mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(regReq)))
-                .andExpect(status().isOk());
+        registerAndVerify(regReq);
 
         LoginRequest goodLogin = new LoginRequest();
         goodLogin.setEmail("alice@example.com");
@@ -365,10 +392,7 @@ class AuthAndTripSecurityTest {
         regReq.setEmail("emptyuser@example.com");
         regReq.setPassword("password123");
 
-        mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(regReq)))
-                .andExpect(status().isOk());
+        registerAndVerify(regReq);
 
         LoginRequest loginReq = new LoginRequest();
         loginReq.setEmail("emptyuser@example.com");
@@ -411,12 +435,8 @@ class AuthAndTripSecurityTest {
         regReq.setEmail("regsession@example.com");
         regReq.setPassword("password123");
 
-        MvcResult result = mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(regReq)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.email").value("regsession@example.com"))
-                .andReturn();
+        MvcResult result = registerAndVerify(regReq);
+        assertEquals("regsession@example.com", objectMapper.readTree(result.getResponse().getContentAsString()).get("email").asText());
 
         MockHttpSession session = (MockHttpSession) result.getRequest().getSession();
         assertNotNull(session);

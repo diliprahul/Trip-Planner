@@ -14,4 +14,6 @@ public interface UserService {
     User updateProfile(String email, String name, String cityOfResidence, String favouritePlace);
     User uploadProfilePicture(String email, MultipartFile file);
     User removeProfilePicture(String email);
+    void deleteLocalAccount(String email, String currentPassword);
+    void deleteGoogleAccount(String email);
 }

@@ -1,46 +1,21 @@
 import { useEffect } from "react";
 
+const sections = [
+  ["acceptance", "Acceptance of terms", "By accessing or using TripPlanner, you agree to these Terms & Conditions. If you do not agree, do not use the application. TripPlanner is a travel-planning tool that helps authenticated users create, generate, view, and delete saved trips."],
+  ["accounts", "Account registration and responsibilities", "To create a local account, you provide your name, email address, password, and, if you choose, your current city and favourite place or city. Registration requires email verification. You may also sign in with Google when that option is available. You are responsible for providing accurate account information and for activity carried out through your account."],
+  ["security", "Password and account security", "Keep your password and access to your email account confidential. TripPlanner supports password-reset and registration-verification codes sent by email; do not share these codes. Tell us promptly at the contact address below if you believe your account has been accessed without permission."],
+  ["trip-information", "Trip planning and itinerary information", "TripPlanner stores the origin, destination, travel dates, selected categories, coordinates, and generated itinerary details needed for your saved trips. Generated schedules, hotel suggestions, map links, weather information, and budget-related information are planning aids only. Confirm travel requirements, prices, availability, opening hours, routes, and safety information independently before making decisions or bookings."],
+  ["third-parties", "Third-party services and external data", "The application relies on external services for features such as sign-in, geocoding, places and hotel suggestions, weather data, maps, and AI-assisted itinerary generation. Their data, availability, and results are outside TripPlanner's control and may be incomplete, inaccurate, delayed, changed, or unavailable. Links to external map services take you to services governed by their own terms and policies."],
+  ["acceptable-use", "Acceptable use", "Use TripPlanner lawfully and only for personal travel planning. Do not attempt to access another person's account or trips; interfere with the application or its providers; submit malicious code or harmful files; use automated means that impair the service; or use the application in a way that violates applicable law or another party's rights."],
+  ["availability", "Service availability and limitations", "We may change, maintain, suspend, or discontinue features without guaranteeing uninterrupted or error-free service. A generated itinerary may be unavailable when an external provider does not respond. TripPlanner does not provide booking, transport, accommodation, emergency, immigration, medical, or legal advice."],
+  ["intellectual-property", "Intellectual property", "The TripPlanner application, its design, and its original content are protected by applicable intellectual-property laws. You may use the service for its intended personal planning purpose. Third-party content, data, names, and map materials remain subject to the rights and terms of their respective owners."],
+  ["liability", "Limitation of liability", "To the extent permitted by applicable law, TripPlanner is not responsible for losses, injuries, costs, missed reservations, or other outcomes arising from use of the service, generated plans, external data, or third-party services. You remain responsible for your travel choices and arrangements."],
+  ["changes", "Changes to these terms", "We may update these terms when the application or its practices change. The revised date will appear on this page. Continued use after an update means you accept the updated terms."],
+];
+
 const TermsConditions = () => {
-  useEffect(() => {
-    document.title = "Terms & Conditions | TripPlanner";
-  }, []);
-
-  return (
-    <div className="legal-page">
-      <div className="legal-container">
-        <h1>Terms & Conditions</h1>
-        <p className="legal-updated">Last updated: October 2026</p>
-
-        <section>
-          <h2>1. Acceptance of Terms</h2>
-          <p>
-            By accessing and using TripPlanner, you agree to comply with and be bound by these Terms & Conditions. If you do not agree with any part of these terms, please discontinue use of the service.
-          </p>
-        </section>
-
-        <section>
-          <h2>2. Use of Service</h2>
-          <p>
-            TripPlanner provides automated itinerary generation, weather data integration, and budget estimation. All travel itineraries, cost breakdowns, and activity suggestions are provided for informational and planning purposes.
-          </p>
-        </section>
-
-        <section>
-          <h2>3. Accuracy of Estimates & Data</h2>
-          <p>
-            Budget estimates, transport links, and weather forecasts are calculated using algorithmic models and third-party data providers. Prices, operational hours, and availability are subject to change and should be verified independently prior to travel.
-          </p>
-        </section>
-
-        <section>
-          <h2>4. Limitation of Liability</h2>
-          <p>
-            TripPlanner shall not be held liable for any direct, indirect, incidental, or consequential damages arising from the use of generated travel plans or reliance on third-party service data.
-          </p>
-        </section>
-      </div>
-    </div>
-  );
+  useEffect(() => { document.title = "Terms & Conditions | TripPlanner"; }, []);
+  return <div className="legal-page"><article className="legal-layout" aria-labelledby="legal-title"><header className="legal-header"><p className="legal-eyebrow">TripPlanner legal</p><h1 id="legal-title">Terms &amp; Conditions</h1><p className="legal-intro">The terms that apply when you use TripPlanner to create and manage travel plans.</p><p className="legal-updated">Last updated: November 5, 2026</p></header><nav className="legal-toc" aria-label="Table of contents"><p>On this page</p><ol>{sections.map(([id, title], index) => <li key={id}><a href={`#${id}`}>{index + 1}. {title}</a></li>)}</ol></nav><div className="legal-content">{sections.map(([id, title, body], index) => <section id={id} key={id} className="legal-section"><h2><span>{String(index + 1).padStart(2, "0")}</span>{title}</h2><p>{body}</p></section>)}<section id="contact" className="legal-contact"><h2>Need help?</h2><p>For questions about our Terms &amp; Conditions or Privacy Policy, contact our support team.</p><p>Email: <a href="mailto:tripplanner738@gmail.com">tripplanner738@gmail.com</a></p></section></div></article></div>;
 };
 
 export default TermsConditions;

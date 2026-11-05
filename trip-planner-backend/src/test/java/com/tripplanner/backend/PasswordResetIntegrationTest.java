@@ -8,13 +8,20 @@ import com.tripplanner.backend.entity.PasswordResetToken;
 import com.tripplanner.backend.entity.User;
 import com.tripplanner.backend.repository.PasswordResetTokenRepository;
 import com.tripplanner.backend.repository.UserRepository;
+import com.tripplanner.backend.repository.TripRepository;
+import com.tripplanner.backend.repository.DayPlanRepository;
+import com.tripplanner.backend.repository.HotelSuggestionRepository;
+import com.tripplanner.backend.repository.PendingRegistrationRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.mail.MailSendException;
+import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
@@ -23,7 +30,7 @@ import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -31,217 +38,154 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 class PasswordResetIntegrationTest {
-
-    @Autowired
-    private MockMvc mockMvc;
-
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private PasswordResetTokenRepository passwordResetTokenRepository;
-
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
-    @Autowired
-    private ObjectMapper objectMapper;
-
-    @MockBean
-    private JavaMailSender javaMailSender;
+    @Autowired private MockMvc mockMvc;
+    @Autowired private UserRepository userRepository;
+    @Autowired private TripRepository tripRepository;
+    @Autowired private DayPlanRepository dayPlanRepository;
+    @Autowired private HotelSuggestionRepository hotelSuggestionRepository;
+    @Autowired private PendingRegistrationRepository pendingRegistrationRepository;
+    @Autowired private PasswordResetTokenRepository passwordResetTokenRepository;
+    @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private ObjectMapper objectMapper;
+    @MockBean private JavaMailSender javaMailSender;
 
     @BeforeEach
     void setUp() {
         passwordResetTokenRepository.deleteAll();
+        pendingRegistrationRepository.deleteAll();
+        hotelSuggestionRepository.deleteAll();
+        dayPlanRepository.deleteAll();
+        tripRepository.deleteAll();
         userRepository.deleteAll();
+        reset(javaMailSender);
     }
 
     @Test
-    void testGenericForgotPasswordResponseKnownAndUnknown() throws Exception {
-        // Unknown email
-        ForgotPasswordRequest req = new ForgotPasswordRequest();
-        req.setEmail("unknown@example.com");
+    void existingEmailSendsAndPersistsHashedOtp() throws Exception {
+        createLocalUser("user@example.com");
 
-        mockMvc.perform(post("/api/auth/forgot-password")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").exists());
+        requestReset(" User@Example.com ").andExpect(status().isOk());
 
-        // Create local user
-        User user = User.builder()
-                .name("Test User")
-                .email("test@example.com")
-                .password(passwordEncoder.encode("oldpassword"))
-                .provider("LOCAL")
-                .build();
-        userRepository.save(user);
-
-        // Known email
-        req.setEmail("test@example.com");
-        mockMvc.perform(post("/api/auth/forgot-password")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").exists());
-
-        // Verify token was generated in DB
-        assertTrue(passwordResetTokenRepository.findByEmail("test@example.com").isPresent());
+        ArgumentCaptor<SimpleMailMessage> message = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(javaMailSender).send(message.capture());
+        assertArrayEquals(new String[]{"user@example.com"}, message.getValue().getTo());
+        PasswordResetToken token = passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow();
+        assertNotNull(token.getOtpHash());
+        assertFalse(token.getOtpHash().matches("\\d{6}"));
+        assertEquals(0, token.getAttempts());
+        assertTrue(token.getExpiryDate().isAfter(LocalDateTime.now().plusMinutes(14)));
     }
 
     @Test
-    void testOtpVerificationAndResetFlow() throws Exception {
-        User user = User.builder()
-                .name("Test User")
-                .email("test@example.com")
-                .password(passwordEncoder.encode("oldpassword"))
-                .provider("LOCAL")
-                .build();
-        userRepository.save(user);
+    void nonExistingEmailDoesNotSendOrPersistOtp() throws Exception {
+        requestReset("missing@example.com")
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value("No account exists with that email address."));
 
-        // Request reset
-        ForgotPasswordRequest forgotReq = new ForgotPasswordRequest();
-        forgotReq.setEmail("test@example.com");
-        mockMvc.perform(post("/api/auth/forgot-password")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(forgotReq)))
-                .andExpect(status().isOk());
-
-        PasswordResetToken token = passwordResetTokenRepository.findByEmail("test@example.com").orElseThrow();
-
-        // Test incorrect OTP first against the generated one.
-        VerifyResetOtpRequest verifyReq = new VerifyResetOtpRequest();
-        verifyReq.setEmail("test@example.com");
-        verifyReq.setOtp("000000"); // likely incorrect
-
-        mockMvc.perform(post("/api/auth/verify-reset-otp")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(verifyReq)))
-                .andExpect(status().isBadRequest());
-
-        // Now update token with known OTP hash for "123456"
-        token.setOtpHash(passwordEncoder.encode("123456"));
-        token.setAttempts(0);
-        passwordResetTokenRepository.save(token);
-
-        // Verify with correct OTP
-        verifyReq.setOtp("123456");
-        mockMvc.perform(post("/api/auth/verify-reset-otp")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(verifyReq)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.valid").value(true));
-
-        // Test invalid password rejection (< 6 chars)
-        ResetPasswordRequest resetReq = new ResetPasswordRequest();
-        resetReq.setEmail("test@example.com");
-        resetReq.setOtp("123456");
-        resetReq.setNewPassword("123"); // too short
-
-        mockMvc.perform(post("/api/auth/reset-password")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(resetReq)))
-                .andExpect(status().is4xxClientError());
-
-        // Successful password reset
-        resetReq.setNewPassword("newsecurepassword123");
-        mockMvc.perform(post("/api/auth/reset-password")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(resetReq)))
-                .andExpect(status().isOk());
-
-        // Verify password updated in DB with BCrypt
-        User updatedUser = userRepository.findByEmail("test@example.com").orElseThrow();
-        assertTrue(passwordEncoder.matches("newsecurepassword123", updatedUser.getPassword()));
-
-        // Verify token invalidated (replay rejection)
-        assertFalse(passwordResetTokenRepository.findByEmail("test@example.com").isPresent());
+        verifyNoInteractions(javaMailSender);
+        assertTrue(passwordResetTokenRepository.findByEmail("missing@example.com").isEmpty());
     }
 
     @Test
-    void testGoogleOnlyAccountProtection() throws Exception {
-        User googleUser = User.builder()
-                .name("Google User")
-                .email("google@example.com")
-                .password(passwordEncoder.encode("dummy"))
-                .provider("GOOGLE")
-                .providerId("goog-123")
-                .build();
-        userRepository.save(googleUser);
+    void smtpFailureDoesNotPersistOtpOrReportSuccess() throws Exception {
+        createLocalUser("user@example.com");
+        doThrow(new MailSendException("SMTP unavailable"))
+                .when(javaMailSender).send(any(SimpleMailMessage.class));
 
-        ForgotPasswordRequest forgotReq = new ForgotPasswordRequest();
-        forgotReq.setEmail("google@example.com");
+        requestReset("user@example.com")
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message").value("We could not send the reset email. Please try again later."));
 
-        mockMvc.perform(post("/api/auth/forgot-password")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(forgotReq)))
-                .andExpect(status().isOk());
-
-        // Should not create token for google-only account
-        assertFalse(passwordResetTokenRepository.findByEmail("google@example.com").isPresent());
+        verify(javaMailSender).send(any(SimpleMailMessage.class));
+        assertTrue(passwordResetTokenRepository.findByEmail("user@example.com").isEmpty());
     }
 
     @Test
-    void testOtpAttemptLimitAndExpiration() throws Exception {
-        User user = User.builder()
-                .name("Test User")
-                .email("test@example.com")
-                .password(passwordEncoder.encode("oldpassword"))
-                .provider("LOCAL")
-                .build();
-        userRepository.save(user);
+    void resendCooldownPreventsSecondEmailAndTokenReplacement() throws Exception {
+        createLocalUser("user@example.com");
+        requestReset("user@example.com").andExpect(status().isOk());
+        Long firstTokenId = passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow().getId();
 
-        PasswordResetToken token = PasswordResetToken.builder()
-                .email("test@example.com")
-                .otpHash(passwordEncoder.encode("123456"))
-                .expiryDate(LocalDateTime.now().plusMinutes(15))
-                .attempts(0)
-                .build();
-        passwordResetTokenRepository.save(token);
+        requestReset("user@example.com").andExpect(status().isTooManyRequests());
 
-        VerifyResetOtpRequest verifyReq = new VerifyResetOtpRequest();
-        verifyReq.setEmail("test@example.com");
-        verifyReq.setOtp("wrong1");
+        verify(javaMailSender, times(1)).send(any(SimpleMailMessage.class));
+        assertEquals(firstTokenId, passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow().getId());
+    }
 
-        // 3 failed attempts
-        for (int i = 0; i < 3; i++) {
-            mockMvc.perform(post("/api/auth/verify-reset-otp")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(verifyReq)))
-                    .andExpect(status().isBadRequest());
+    @Test
+    void invalidAndExpiredOtpsAreRejected() throws Exception {
+        createLocalUser("user@example.com");
+        saveToken("user@example.com", "123456", LocalDateTime.now().plusMinutes(15), 0);
+
+        verifyOtp("user@example.com", "000000").andExpect(status().isBadRequest());
+        assertEquals(1, passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow().getAttempts());
+
+        passwordResetTokenRepository.deleteAll();
+        saveToken("user@example.com", "123456", LocalDateTime.now().minusMinutes(1), 0);
+        verifyOtp("user@example.com", "123456").andExpect(status().isBadRequest());
+        assertTrue(passwordResetTokenRepository.findByEmail("user@example.com").isEmpty());
+    }
+
+    @Test
+    void maximumAttemptsInvalidatesOtp() throws Exception {
+        createLocalUser("user@example.com");
+        saveToken("user@example.com", "123456", LocalDateTime.now().plusMinutes(15), 0);
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            verifyOtp("user@example.com", "000000").andExpect(status().isBadRequest());
         }
 
-        // 4th attempt with correct OTP should fail because max attempts exceeded
-        verifyReq.setOtp("123456");
-        mockMvc.perform(post("/api/auth/verify-reset-otp")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(verifyReq)))
-                .andExpect(status().isBadRequest());
+        assertTrue(passwordResetTokenRepository.findByEmail("user@example.com").isEmpty());
+        verifyOtp("user@example.com", "123456").andExpect(status().isBadRequest());
     }
 
     @Test
-    void testEmailSendFailureSwallowedGracefully() throws Exception {
-        User user = User.builder()
-                .name("Test User")
-                .email("test@example.com")
-                .password(passwordEncoder.encode("oldpassword"))
-                .provider("LOCAL")
-                .build();
-        userRepository.save(user);
+    void successfulResetUpdatesPasswordAndPreventsOtpReuse() throws Exception {
+        createLocalUser("user@example.com");
+        saveToken("user@example.com", "123456", LocalDateTime.now().plusMinutes(15), 0);
 
-        org.mockito.Mockito.doThrow(new org.springframework.mail.MailException("SMTP failure") {})
-                .when(javaMailSender).send(any(org.springframework.mail.SimpleMailMessage.class));
-
-        ForgotPasswordRequest forgotReq = new ForgotPasswordRequest();
-        forgotReq.setEmail("test@example.com");
-
-        mockMvc.perform(post("/api/auth/forgot-password")
+        ResetPasswordRequest request = new ResetPasswordRequest();
+        request.setEmail("user@example.com");
+        request.setOtp("123456");
+        request.setNewPassword("new-secure-password1");
+        mockMvc.perform(post("/api/auth/reset-password")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(forgotReq)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").exists());
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
 
-        // Verify token was saved even though email send failed
-        assertTrue(passwordResetTokenRepository.findByEmail("test@example.com").isPresent());
+        assertTrue(passwordEncoder.matches("new-secure-password1",
+                userRepository.findByEmail("user@example.com").orElseThrow().getPassword()));
+        assertTrue(passwordResetTokenRepository.findByEmail("user@example.com").isEmpty());
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+    private org.springframework.test.web.servlet.ResultActions requestReset(String email) throws Exception {
+        ForgotPasswordRequest request = new ForgotPasswordRequest();
+        request.setEmail(email);
+        return mockMvc.perform(post("/api/auth/forgot-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions verifyOtp(String email, String otp) throws Exception {
+        VerifyResetOtpRequest request = new VerifyResetOtpRequest();
+        request.setEmail(email);
+        request.setOtp(otp);
+        return mockMvc.perform(post("/api/auth/verify-reset-otp")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)));
+    }
+
+    private void createLocalUser(String email) {
+        userRepository.save(User.builder().name("Test User").email(email)
+                .password(passwordEncoder.encode("old-password")).provider("LOCAL").build());
+    }
+
+    private void saveToken(String email, String otp, LocalDateTime expiryDate, int attempts) {
+        passwordResetTokenRepository.save(PasswordResetToken.builder().email(email)
+                .otpHash(passwordEncoder.encode(otp)).expiryDate(expiryDate).attempts(attempts).build());
     }
 }

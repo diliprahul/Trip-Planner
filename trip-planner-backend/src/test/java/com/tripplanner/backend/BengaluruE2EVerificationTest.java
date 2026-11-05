@@ -5,6 +5,7 @@ import com.tripplanner.backend.dto.CoordinateBackfillReport;
 import com.tripplanner.backend.dto.CreateTripRequest;
 import com.tripplanner.backend.dto.LoginRequest;
 import com.tripplanner.backend.dto.RegisterRequest;
+import com.tripplanner.backend.dto.RegistrationOtpRequest;
 import com.tripplanner.backend.dto.TripDetailResponse;
 import com.tripplanner.backend.entity.DayPlan;
 import com.tripplanner.backend.entity.Trip;
@@ -12,6 +13,7 @@ import com.tripplanner.backend.repository.DayPlanRepository;
 import com.tripplanner.backend.repository.HotelSuggestionRepository;
 import com.tripplanner.backend.repository.TripRepository;
 import com.tripplanner.backend.repository.UserRepository;
+import com.tripplanner.backend.repository.PendingRegistrationRepository;
 import com.tripplanner.backend.service.GeocodingService;
 import com.tripplanner.backend.service.GeminiService;
 import com.tripplanner.backend.service.OverpassService;
@@ -23,9 +25,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -39,6 +44,8 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -46,11 +53,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class BengaluruE2EVerificationTest {
 
+    @MockBean
+    private JavaMailSender javaMailSender;
+
     @Autowired
     private MockMvc mockMvc;
 
     @Autowired
     private UserRepository userRepository;
+    @Autowired private PendingRegistrationRepository pendingRegistrationRepository;
 
     @Autowired
     private TripRepository tripRepository;
@@ -75,6 +86,8 @@ class BengaluruE2EVerificationTest {
 
     @BeforeEach
     void setUp() {
+        pendingRegistrationRepository.deleteAll();
+        doNothing().when(javaMailSender).send(any(SimpleMailMessage.class));
         hotelSuggestionRepository.deleteAll();
         dayPlanRepository.deleteAll();
         tripRepository.deleteAll();
@@ -121,6 +134,17 @@ class BengaluruE2EVerificationTest {
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(reg)))
+                .andExpect(status().isOk());
+
+        var mailCaptor = org.mockito.ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(javaMailSender).send(mailCaptor.capture());
+        var otpMatcher = java.util.regex.Pattern.compile("(?<!\\d)(\\d{6})(?!\\d)").matcher(mailCaptor.getValue().getText());
+        assertTrue(otpMatcher.find(), "Registration email should contain its generated OTP");
+        RegistrationOtpRequest otpRequest = new RegistrationOtpRequest();
+        otpRequest.setEmail(reg.getEmail());
+        otpRequest.setOtp(otpMatcher.group(1));
+        mockMvc.perform(post("/api/auth/register/verify-otp").contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(otpRequest)))
                 .andExpect(status().isOk());
 
         LoginRequest login = new LoginRequest();
