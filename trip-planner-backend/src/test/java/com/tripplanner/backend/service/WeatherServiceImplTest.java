@@ -11,6 +11,7 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDate;
+import java.time.Clock;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -21,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 class WeatherServiceImplTest {
@@ -202,10 +204,42 @@ class WeatherServiceImplTest {
                 .thenThrow(new RestClientException("Connection timed out"));
 
         WeatherResponseDto response = weatherService.getForecast(17.3850, 78.4867, start, end);
+        WeatherResponseDto secondResponse = weatherService.getForecast(17.3850, 78.4867, start, end);
 
         assertNotNull(response);
         assertEquals(WeatherResponseDto.Status.API_ERROR, response.getStatus());
         assertNotNull(response.getMessage());
+        assertEquals(WeatherResponseDto.Status.API_ERROR, secondResponse.getStatus());
+        verify(restTemplate, times(2)).getForObject(anyString(), eq(Map.class));
+    }
+
+    @Test
+    void successfulForecastIsCachedForSameRoundedCoordinatesAndRange() {
+        LocalDate day = LocalDate.of(2026, 10, 6);
+        when(restTemplate.getForObject(anyString(), eq(Map.class)))
+                .thenReturn(createMockOpenMeteoResponse(List.of("2026-10-06")));
+
+        WeatherResponseDto first = weatherService.getForecast(17.38501, 78.48671, day, day);
+        WeatherResponseDto second = weatherService.getForecast(17.38502, 78.48672, day, day);
+
+        assertEquals(WeatherResponseDto.Status.AVAILABLE, first.getStatus());
+        assertEquals(WeatherResponseDto.Status.AVAILABLE, second.getStatus());
+        verify(restTemplate, times(1)).getForObject(anyString(), eq(Map.class));
+    }
+
+    @Test
+    void cachedForecastExpiresAfterTenMinutes() {
+        Clock clock = Mockito.mock(Clock.class);
+        Mockito.when(clock.millis()).thenReturn(1_000L, 602_000L);
+        weatherService = new WeatherServiceImpl(restTemplate, clock);
+        LocalDate day = LocalDate.of(2026, 10, 6);
+        when(restTemplate.getForObject(anyString(), eq(Map.class)))
+                .thenReturn(createMockOpenMeteoResponse(List.of("2026-10-06")));
+
+        weatherService.getForecast(17.3850, 78.4867, day, day);
+        weatherService.getForecast(17.3850, 78.4867, day, day);
+
+        verify(restTemplate, times(2)).getForObject(anyString(), eq(Map.class));
     }
 
     @Test

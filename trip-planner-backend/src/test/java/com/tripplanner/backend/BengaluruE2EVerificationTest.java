@@ -15,6 +15,7 @@ import com.tripplanner.backend.repository.TripRepository;
 import com.tripplanner.backend.repository.UserRepository;
 import com.tripplanner.backend.repository.PendingRegistrationRepository;
 import com.tripplanner.backend.service.GeocodingService;
+import com.tripplanner.backend.service.EmailDeliveryService;
 import com.tripplanner.backend.service.GeminiService;
 import com.tripplanner.backend.service.OverpassService;
 import com.tripplanner.backend.util.GeoLocation;
@@ -29,8 +30,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -47,6 +46,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest
@@ -54,7 +54,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class BengaluruE2EVerificationTest {
 
     @MockBean
-    private JavaMailSender javaMailSender;
+    private EmailDeliveryService emailDeliveryService;
 
     @Autowired
     private MockMvc mockMvc;
@@ -87,7 +87,7 @@ class BengaluruE2EVerificationTest {
     @BeforeEach
     void setUp() {
         pendingRegistrationRepository.deleteAll();
-        doNothing().when(javaMailSender).send(any(SimpleMailMessage.class));
+        when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenReturn(true);
         hotelSuggestionRepository.deleteAll();
         dayPlanRepository.deleteAll();
         tripRepository.deleteAll();
@@ -131,19 +131,19 @@ class BengaluruE2EVerificationTest {
         reg.setEmail("e2e@example.com");
         reg.setPassword("password123");
 
-        mockMvc.perform(post("/api/auth/register")
+        mockMvc.perform(post("/api/auth/register").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(reg)))
                 .andExpect(status().isOk());
 
-        var mailCaptor = org.mockito.ArgumentCaptor.forClass(SimpleMailMessage.class);
-        verify(javaMailSender).send(mailCaptor.capture());
-        var otpMatcher = java.util.regex.Pattern.compile("(?<!\\d)(\\d{6})(?!\\d)").matcher(mailCaptor.getValue().getText());
+        var mailCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(emailDeliveryService).send(anyString(), anyString(), mailCaptor.capture());
+        var otpMatcher = java.util.regex.Pattern.compile("(?<!\\d)(\\d{6})(?!\\d)").matcher(mailCaptor.getValue());
         assertTrue(otpMatcher.find(), "Registration email should contain its generated OTP");
         RegistrationOtpRequest otpRequest = new RegistrationOtpRequest();
         otpRequest.setEmail(reg.getEmail());
         otpRequest.setOtp(otpMatcher.group(1));
-        mockMvc.perform(post("/api/auth/register/verify-otp").contentType(MediaType.APPLICATION_JSON)
+        mockMvc.perform(post("/api/auth/register/verify-otp").with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(otpRequest)))
                 .andExpect(status().isOk());
 
@@ -151,7 +151,7 @@ class BengaluruE2EVerificationTest {
         login.setEmail("e2e@example.com");
         login.setPassword("password123");
 
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(login)))
                 .andExpect(status().isOk())
@@ -168,7 +168,7 @@ class BengaluruE2EVerificationTest {
         tripReq.setEndDate(LocalDate.of(2026, 11, 12));
         tripReq.setCategories(List.of("HISTORIC", "CULTURAL"));
 
-        MvcResult createResult = mockMvc.perform(post("/api/trips")
+        MvcResult createResult = mockMvc.perform(post("/api/trips").with(csrf())
                         .session(session)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(tripReq)))
@@ -180,7 +180,7 @@ class BengaluruE2EVerificationTest {
         assertNotNull(tripId);
 
         // 3. Generate Bengaluru Itinerary
-        MvcResult genResult = mockMvc.perform(post("/api/trips/" + tripId + "/generate")
+        MvcResult genResult = mockMvc.perform(post("/api/trips/" + tripId + "/generate").with(csrf())
                         .session(session))
                 .andExpect(status().isOk())
                 .andReturn();
@@ -205,7 +205,7 @@ class BengaluruE2EVerificationTest {
         }
 
         // 3 & 4. Verify automatic backfill request in browser Network tab (POST /api/trips/{id}/coordinates/backfill, status 200 OK)
-        MvcResult backfillResult = mockMvc.perform(post("/api/trips/" + tripId + "/coordinates/backfill")
+        MvcResult backfillResult = mockMvc.perform(post("/api/trips/" + tripId + "/coordinates/backfill").with(csrf())
                         .session(session))
                 .andExpect(status().isOk())
                 .andReturn();
@@ -252,6 +252,7 @@ class BengaluruE2EVerificationTest {
         MockMultipartFile file = new MockMultipartFile("file", "profile.jpg", "image/jpeg", validImageBytes);
         mockMvc.perform(multipart("/api/auth/profile/picture")
                         .file(file)
+                        .with(csrf())
                         .session(session))
                 .andExpect(status().isOk());
 

@@ -12,6 +12,7 @@ import com.tripplanner.backend.util.GeoLocation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.time.LocalDate;
@@ -40,6 +41,9 @@ class TripPlannerBackendApplicationTests {
 
 	@Autowired
 	private UserService userService;
+
+	@Autowired
+	private Environment environment;
 
 	@MockBean
 	private OverpassService overpassService;
@@ -115,6 +119,12 @@ class TripPlannerBackendApplicationTests {
 	}
 
 	@Test
+	void httpSessionTimeoutAndCookieMaxAgeAreSevenDays() {
+		assertEquals("604800s", environment.getProperty("server.servlet.session.timeout"));
+		assertEquals("604800s", environment.getProperty("server.servlet.session.cookie.max-age"));
+	}
+
+	@Test
 	void contextLoads() {
 	}
 
@@ -162,8 +172,7 @@ class TripPlannerBackendApplicationTests {
 		assertNotNull(itinerary);
 		assertFalse(itinerary.getDayPlans().isEmpty(), "Day plans should not be empty");
 		
-		var weather = itinerary.getWeatherResponse();
-		assertNotNull(weather, "WeatherResponse should not be null");
+		assertNull(itinerary.getWeatherResponse(), "Trip generation must not wait for a weather forecast");
 	}
 
 	@Test
@@ -186,11 +195,11 @@ class TripPlannerBackendApplicationTests {
 		assertNotNull(itinerary);
 		assertNotNull(itinerary.getDayPlans());
 		assertNotNull(itinerary.getHotels());
-		assertNotNull(itinerary.getWeatherResponse());
+		assertNull(itinerary.getWeatherResponse(), "Saved itinerary responses must not depend on weather availability");
 
 		int placesCount = itinerary.getDayPlans().size();
 		int hotelsCount = itinerary.getHotels().size();
-		int weatherCount = itinerary.getWeatherResponse().getForecasts() != null ? itinerary.getWeatherResponse().getForecasts().size() : 0;
+		int weatherCount = 0;
 
 		System.out.println("=== ACTUAL RUNTIME VERIFICATION REPORT ===");
 		System.out.println("HTTP Status: 200 OK");

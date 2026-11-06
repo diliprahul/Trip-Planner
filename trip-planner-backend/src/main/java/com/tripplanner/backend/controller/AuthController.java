@@ -14,6 +14,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -21,6 +23,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.web.bind.annotation.*;
@@ -33,12 +36,15 @@ import java.time.Instant;
 @RequiredArgsConstructor
 public class AuthController {
 
+    private static final Logger log = LoggerFactory.getLogger(AuthController.class);
+
     private final UserService userService;
     private final AuthenticationManager authenticationManager;
     private final UserDetailsService userDetailsService;
     private final PasswordResetService passwordResetService;
     private final RegistrationVerificationService registrationVerificationService;
     private final SecurityContextRepository securityContextRepository;
+    private final SessionAuthenticationStrategy sessionAuthenticationStrategy;
 
     @PostMapping("/register")
     public ResponseEntity<Map<String, String>> register(@RequestBody RegisterRequest request) {
@@ -81,6 +87,7 @@ public class AuthController {
             UserDetails principal = userDetailsService.loadUserByUsername(user.getEmail());
             Authentication authentication = UsernamePasswordAuthenticationToken.authenticated(
                     principal, null, principal.getAuthorities());
+            sessionAuthenticationStrategy.onAuthentication(authentication, httpRequest, httpResponse);
             SecurityContext context = SecurityContextHolder.createEmptyContext();
             context.setAuthentication(authentication);
             SecurityContextHolder.setContext(context);
@@ -106,6 +113,7 @@ public ResponseEntity<AuthResponse> login(
 
     SecurityContext context = SecurityContextHolder.createEmptyContext();
     context.setAuthentication(authentication);
+    sessionAuthenticationStrategy.onAuthentication(authentication, httpRequest, httpResponse);
     SecurityContextHolder.setContext(context);
 
     securityContextRepository.saveContext(
@@ -121,14 +129,16 @@ public ResponseEntity<AuthResponse> login(
 
     @PostMapping("/forgot-password")
     public ResponseEntity<Map<String, String>> forgotPassword(@RequestBody ForgotPasswordRequest request) {
-        PasswordResetRequestResult result = passwordResetService.requestPasswordReset(request.getEmail());
-        return switch (result) {
-            case SENT -> ResponseEntity.ok(Map.of("message", "Password reset OTP sent. Check your email."));
-            case EMAIL_NOT_FOUND -> ResponseEntity.status(404).body(Map.of("message", "No account exists with that email address."));
-            case UNSUPPORTED_ACCOUNT -> ResponseEntity.badRequest().body(Map.of("message", "This account uses Google sign-in and cannot reset a local password."));
-            case COOLDOWN_ACTIVE -> ResponseEntity.status(429).body(Map.of("message", "Please wait one minute before requesting another OTP."));
-            case DELIVERY_FAILED -> ResponseEntity.status(503).body(Map.of("message", "We could not send the reset email. Please try again later."));
-        };
+        try {
+            PasswordResetRequestResult result = passwordResetService.requestPasswordReset(request.getEmail());
+            if (result == PasswordResetRequestResult.DELIVERY_FAILED) {
+                log.warn("Forgot-password processing did not complete; outcome=delivery_or_persistence_failure");
+            }
+        } catch (RuntimeException exception) {
+            log.error("Forgot-password processing failed; exceptionType={}", exception.getClass().getSimpleName());
+        }
+        return ResponseEntity.ok(Map.of(
+                "message", "If an account is eligible for password reset, instructions will be sent."));
     }
 
     @PostMapping("/verify-reset-otp")

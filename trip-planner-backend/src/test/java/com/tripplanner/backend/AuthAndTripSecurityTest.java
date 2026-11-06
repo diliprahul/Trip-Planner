@@ -13,6 +13,7 @@ import com.tripplanner.backend.repository.TripRepository;
 import com.tripplanner.backend.repository.UserRepository;
 import com.tripplanner.backend.repository.PendingRegistrationRepository;
 import com.tripplanner.backend.service.UserService;
+import com.tripplanner.backend.service.EmailDeliveryService;
 import com.tripplanner.backend.service.TripService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,8 +23,6 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -36,8 +35,10 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.security.test.web.servlet.response.SecurityMockMvcResultMatchers.authenticated;
 import static org.springframework.security.test.web.servlet.response.SecurityMockMvcResultMatchers.unauthenticated;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
@@ -48,7 +49,7 @@ import static org.mockito.ArgumentCaptor.forClass;
 class AuthAndTripSecurityTest {
 
     @MockBean
-    private JavaMailSender javaMailSender;
+    private EmailDeliveryService emailDeliveryService;
 
     @Autowired
     private MockMvc mockMvc;
@@ -84,9 +85,8 @@ class AuthAndTripSecurityTest {
     @BeforeEach
     void setUp() {
         pendingRegistrationRepository.deleteAll();
-        doNothing().when(javaMailSender).send(any(SimpleMailMessage.class));
-        reset(javaMailSender);
-        doNothing().when(javaMailSender).send(any(SimpleMailMessage.class));
+        reset(emailDeliveryService);
+        org.mockito.Mockito.when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenReturn(true);
         hotelSuggestionRepository.deleteAll();
         dayPlanRepository.deleteAll();
         tripRepository.deleteAll();
@@ -94,19 +94,19 @@ class AuthAndTripSecurityTest {
     }
 
     private MvcResult registerAndVerify(RegisterRequest request) throws Exception {
-        reset(javaMailSender);
-        doNothing().when(javaMailSender).send(any(SimpleMailMessage.class));
-        mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
+        reset(emailDeliveryService);
+        org.mockito.Mockito.when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenReturn(true);
+        mockMvc.perform(post("/api/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request))).andExpect(status().isOk());
-        var captor = forClass(SimpleMailMessage.class);
-        verify(javaMailSender).send(captor.capture());
-        String body = captor.getValue().getText();
+        var captor = forClass(String.class);
+        verify(emailDeliveryService).send(anyString(), anyString(), captor.capture());
+        String body = captor.getValue();
         java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?<!\\d)(\\d{6})(?!\\d)").matcher(body);
         assertTrue(matcher.find(), "Registration email should contain its generated OTP");
         RegistrationOtpRequest otpRequest = new RegistrationOtpRequest();
         otpRequest.setEmail(request.getEmail());
         otpRequest.setOtp(matcher.group(1));
-        return mockMvc.perform(post("/api/auth/register/verify-otp").contentType(MediaType.APPLICATION_JSON)
+        return mockMvc.perform(post("/api/auth/register/verify-otp").with(csrf()).contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(otpRequest))).andExpect(status().isOk()).andReturn();
     }
 
@@ -117,7 +117,7 @@ class AuthAndTripSecurityTest {
         req.setEmail("alice@example.com");
         req.setPassword("password123");
 
-        mockMvc.perform(post("/api/auth/register")
+        mockMvc.perform(post("/api/auth/register").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isOk());
@@ -146,7 +146,7 @@ class AuthAndTripSecurityTest {
         dupReq.setEmail("alice@example.com");
         dupReq.setPassword("other123");
 
-        mockMvc.perform(post("/api/auth/register")
+        mockMvc.perform(post("/api/auth/register").with(csrf())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(dupReq)))
                 .andExpect(status().isConflict())
@@ -157,7 +157,7 @@ class AuthAndTripSecurityTest {
         badLogin.setEmail("alice@example.com");
         badLogin.setPassword("wrongpassword");
 
-        mockMvc.perform(post("/api/auth/login")
+        mockMvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(badLogin)))
                 .andExpect(status().is4xxClientError());
@@ -167,7 +167,7 @@ class AuthAndTripSecurityTest {
         goodLogin.setEmail("alice@example.com");
         goodLogin.setPassword("secret123");
 
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(goodLogin)))
                 .andExpect(status().isOk())
@@ -191,13 +191,13 @@ class AuthAndTripSecurityTest {
         tripReq.setEndDate(LocalDate.of(2026, 12, 3));
         tripReq.setCategories(List.of("HISTORIC"));
 
-        mockMvc.perform(post("/api/trips")
+        mockMvc.perform(post("/api/trips").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(tripReq)))
                 .andExpect(status().isUnauthorized());
 
         // 7 & 8. Authenticated trip creation succeeds and has correct user
-        MvcResult tripResult = mockMvc.perform(post("/api/trips")
+        MvcResult tripResult = mockMvc.perform(post("/api/trips").with(csrf())
                         .session(aliceSession)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(tripReq)))
@@ -233,7 +233,7 @@ class AuthAndTripSecurityTest {
         bobLogin.setEmail("bob@example.com");
         bobLogin.setPassword("bobpass123");
 
-        MvcResult bobLoginResult = mockMvc.perform(post("/api/auth/login")
+        MvcResult bobLoginResult = mockMvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(bobLogin)))
                 .andExpect(status().isOk())
@@ -248,26 +248,26 @@ class AuthAndTripSecurityTest {
                 .andExpect(status().isForbidden());
 
         // 12. User cannot generate another user's trip
-        mockMvc.perform(post("/api/trips/" + tripId + "/generate")
+        mockMvc.perform(post("/api/trips/" + tripId + "/generate").with(csrf())
                         .session(bobSession))
                 .andExpect(status().isForbidden());
 
         // 13. User cannot delete another user's trip
-        mockMvc.perform(delete("/api/trips/" + tripId)
+        mockMvc.perform(delete("/api/trips/" + tripId).with(csrf())
                         .session(bobSession))
                 .andExpect(status().isForbidden());
 
         // Unauthenticated delete rejected (401)
-        mockMvc.perform(delete("/api/trips/" + tripId))
+        mockMvc.perform(delete("/api/trips/" + tripId).with(csrf()))
                 .andExpect(status().isUnauthorized());
 
         // Nonexistent trip delete returns 404 (not 500)
-        mockMvc.perform(delete("/api/trips/999999")
+        mockMvc.perform(delete("/api/trips/999999").with(csrf())
                         .session(aliceSession))
                 .andExpect(status().isNotFound());
 
         // Owner can successfully delete their trip (200)
-        mockMvc.perform(delete("/api/trips/" + tripId)
+        mockMvc.perform(delete("/api/trips/" + tripId).with(csrf())
                         .session(aliceSession))
                 .andExpect(status().isOk());
 
@@ -294,7 +294,7 @@ class AuthAndTripSecurityTest {
                 .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(0)));
 
         // 14. Logout invalidates authentication
-        mockMvc.perform(post("/api/auth/logout")
+        mockMvc.perform(post("/api/auth/logout").with(csrf())
                         .session(aliceSession))
                 .andExpect(status().isOk());
 
@@ -335,7 +335,7 @@ class AuthAndTripSecurityTest {
         goodLogin.setEmail("alice@example.com");
         goodLogin.setPassword("secret123");
 
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(goodLogin)))
                 .andExpect(status().isOk())
@@ -398,7 +398,7 @@ class AuthAndTripSecurityTest {
         loginReq.setEmail("emptyuser@example.com");
         loginReq.setPassword("password123");
 
-        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(loginReq)))
                 .andExpect(status().isOk())
@@ -459,7 +459,7 @@ class AuthAndTripSecurityTest {
         loginReq.setEmail("loginsession@example.com");
         loginReq.setPassword("password123");
 
-        MvcResult result = mockMvc.perform(post("/api/auth/login")
+        MvcResult result = mockMvc.perform(post("/api/auth/login").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(loginReq)))
                 .andExpect(status().isOk())
@@ -474,7 +474,7 @@ class AuthAndTripSecurityTest {
                 .andExpect(jsonPath("$.email").value("loginsession@example.com"));
 
         // Logout
-        mockMvc.perform(post("/api/auth/logout")
+        mockMvc.perform(post("/api/auth/logout").with(csrf())
                         .session(session))
                 .andExpect(status().isOk());
 

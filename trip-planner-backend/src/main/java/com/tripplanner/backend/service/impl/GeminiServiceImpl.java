@@ -3,8 +3,9 @@ package com.tripplanner.backend.service.impl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tripplanner.backend.service.GeminiService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -16,9 +17,10 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class GeminiServiceImpl implements GeminiService {
 
@@ -33,6 +35,13 @@ public class GeminiServiceImpl implements GeminiService {
 
     private static final String GEMINI_URL =
         "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent";
+    private final Semaphore geminiConcurrency = new Semaphore(3, true);
+
+    @Autowired
+    public GeminiServiceImpl(@Qualifier("geminiRestTemplate") RestTemplate restTemplate, ObjectMapper objectMapper) {
+        this.restTemplate = restTemplate;
+        this.objectMapper = objectMapper;
+    }
 
     @Override
     public List<Map<String, String>> generateItinerary(String destination, int days) {
@@ -51,47 +60,47 @@ public class GeminiServiceImpl implements GeminiService {
         );
 
         try {
-            log.info("Calling Gemini API for destination: {} with {} days", destination, days);
+            log.info("gemini_stage=itinerary outcome=requested day_count={}", days);
             Map<String, Object> request = Map.of(
                 "contents", List.of(
                     Map.of("parts", List.of(Map.of("text", prompt)))
                 )
             );
 
-            Map<String, Object> response = callGemini(request);
+            Map<String, Object> response = callGemini("itinerary", request);
             
             if (response == null || !response.containsKey("candidates")) {
-                log.warn("Gemini API returned malformed or missing 'candidates' for destination: {}", destination);
+                log.warn("Gemini stage=itinerary outcome=malformed_response");
                 return Collections.emptyList();
             }
 
             List<Map<String, Object>> candidates = (List<Map<String, Object>>) response.get("candidates");
             if (candidates == null || candidates.isEmpty()) {
-                log.warn("Gemini API candidates list is empty for destination: {}", destination);
+                log.warn("Gemini stage=itinerary outcome=empty_candidates");
                 return Collections.emptyList();
             }
 
             Map<String, Object> firstCandidate = candidates.get(0);
             if (firstCandidate == null || !firstCandidate.containsKey("content")) {
-                log.warn("Gemini API candidate content is missing for destination: {}", destination);
+                log.warn("Gemini stage=itinerary outcome=missing_content");
                 return Collections.emptyList();
             }
 
             Map<String, Object> content = (Map<String, Object>) firstCandidate.get("content");
             if (content == null || !content.containsKey("parts")) {
-                log.warn("Gemini API content parts are missing for destination: {}", destination);
+                log.warn("Gemini stage=itinerary outcome=missing_parts");
                 return Collections.emptyList();
             }
 
             List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
             if (parts == null || parts.isEmpty() || !parts.get(0).containsKey("text")) {
-                log.warn("Gemini API parts text is missing for destination: {}", destination);
+                log.warn("Gemini stage=itinerary outcome=missing_text");
                 return Collections.emptyList();
             }
 
             String jsonText = (String) parts.get(0).get("text");
             if (jsonText == null || jsonText.isBlank()) {
-                log.warn("Gemini API returned blank text for destination: {}", destination);
+                log.warn("Gemini stage=itinerary outcome=blank_text");
                 return Collections.emptyList();
             }
 
@@ -115,19 +124,19 @@ public class GeminiServiceImpl implements GeminiService {
                 }
             }
 
-            log.info("Gemini successfully generated {} valid tourist place suggestions for destination: {}", validSuggestions.size(), destination);
+            log.info("gemini_stage=itinerary outcome=success result_count={}", validSuggestions.size());
             return validSuggestions;
 
         } catch (HttpStatusCodeException e) {
-            log.warn("Gemini itinerary request failed for {} with HTTP {} {} (model={})",
-                    destination, e.getStatusCode().value(), e.getStatusText(), model);
+            log.warn("Gemini itinerary request failed with HTTP {} (model={})",
+                    e.getStatusCode().value(), model);
             return Collections.emptyList();
         } catch (RestClientException e) {
-            log.warn("Gemini itinerary request failed for {} using model={}: {}",
-                    destination, model, e.getClass().getSimpleName());
+            log.warn("Gemini itinerary request failed using model={}: {}",
+                    model, e.getClass().getSimpleName());
             return Collections.emptyList();
         } catch (Exception e) {
-            log.error("Gemini API call or response parsing failed for destination {}: {}", destination, e.getMessage());
+            log.error("Gemini itinerary call or response parsing failed: {}", e.getClass().getSimpleName());
             return Collections.emptyList();
         }
     }
@@ -147,14 +156,14 @@ public class GeminiServiceImpl implements GeminiService {
         );
 
         try {
-            log.info("Calling Gemini API for hotels in destination: {}", destination);
+            log.info("gemini_stage=hotels outcome=requested result_limit={}", limit);
             Map<String, Object> request = Map.of(
                 "contents", List.of(
                     Map.of("parts", List.of(Map.of("text", prompt)))
                 )
             );
 
-            Map<String, Object> response = callGemini(request);
+            Map<String, Object> response = callGemini("hotels", request);
             if (response == null || !response.containsKey("candidates")) {
                 return Collections.emptyList();
             }
@@ -187,23 +196,39 @@ public class GeminiServiceImpl implements GeminiService {
                     }
                 }
             }
-            log.info("Gemini successfully generated {} hotel suggestions for {}", validHotels.size(), destination);
+            log.info("gemini_stage=hotels outcome=success result_count={}", validHotels.size());
             return validHotels;
         } catch (HttpStatusCodeException e) {
-            log.warn("Gemini hotel request failed for {} with HTTP {} {} (model={})",
-                    destination, e.getStatusCode().value(), e.getStatusText(), model);
+            log.warn("Gemini hotel request failed with HTTP {} (model={})",
+                    e.getStatusCode().value(), model);
             return Collections.emptyList();
         } catch (RestClientException e) {
-            log.warn("Gemini hotel request failed for {} using model={}: {}",
-                    destination, model, e.getClass().getSimpleName());
+            log.warn("Gemini hotel request failed using model={}: {}",
+                    model, e.getClass().getSimpleName());
             return Collections.emptyList();
         } catch (Exception e) {
-            log.warn("Gemini hotel response parsing failed for {}: {}", destination, e.getClass().getSimpleName());
+            log.warn("Gemini hotel response parsing failed: {}", e.getClass().getSimpleName());
             return Collections.emptyList();
         }
     }
 
-    private Map<String, Object> callGemini(Map<String, Object> request) {
+    private Map<String, Object> callGemini(String stage, Map<String, Object> request) {
+        long requestStarted = System.nanoTime();
+        boolean acquired;
+        try {
+            acquired = geminiConcurrency.tryAcquire(5, TimeUnit.SECONDS);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            log.info("External request completed: service=gemini stage={} outcome=interrupted durationMs={}",
+                    stage, elapsedMillis(requestStarted));
+            return null;
+        }
+        if (!acquired) {
+            log.info("External request completed: service=gemini stage={} outcome=concurrency_limit durationMs={}",
+                    stage, elapsedMillis(requestStarted));
+            return null;
+        }
+        try {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("x-goog-api-key", apiKey);
@@ -212,16 +237,23 @@ public class GeminiServiceImpl implements GeminiService {
         long backoffMillis = 1000;
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            long startedAt = System.nanoTime();
             try {
-                return restTemplate.exchange(
+                Map<String, Object> response = restTemplate.exchange(
                         GEMINI_URL.formatted(model),
                         HttpMethod.POST,
                         new HttpEntity<>(request, headers),
                         Map.class
                 ).getBody();
+                log.info("External request completed: service=gemini stage={} outcome=success attempt={} durationMs={}",
+                        stage, attempt, elapsedMillis(startedAt));
+                return response;
             } catch (HttpStatusCodeException e) {
                 int status = e.getStatusCode().value();
                 boolean isRetryable = (status == 503 || status == 429 || status == 502 || status == 504 || e.getStatusCode().is5xxServerError());
+                log.info("External request completed: service=gemini stage={} outcome={} attempt={} durationMs={}",
+                        stage, isRetryable && attempt < maxAttempts ? "retryable_http_error" : "http_error",
+                        attempt, elapsedMillis(startedAt));
                 if (isRetryable && attempt < maxAttempts) {
                     log.warn("Gemini API call failed with HTTP {} {}. Retrying in {} ms (attempt {}/{})",
                             status, e.getStatusText(), backoffMillis, attempt, maxAttempts);
@@ -236,6 +268,9 @@ public class GeminiServiceImpl implements GeminiService {
                     throw e;
                 }
             } catch (RestClientException e) {
+                log.info("External request completed: service=gemini stage={} outcome={} attempt={} durationMs={}",
+                        stage, attempt < maxAttempts ? "retryable_exception" : "exception",
+                        attempt, elapsedMillis(startedAt));
                 if (attempt < maxAttempts) {
                     log.warn("Gemini API call failed with {}. Retrying in {} ms (attempt {}/{})",
                             e.getClass().getSimpleName(), backoffMillis, attempt, maxAttempts);
@@ -252,6 +287,13 @@ public class GeminiServiceImpl implements GeminiService {
             }
         }
         return null;
+        } finally {
+            geminiConcurrency.release();
+        }
+    }
+
+    private long elapsedMillis(long startedAtNanos) {
+        return (System.nanoTime() - startedAtNanos) / 1_000_000;
     }
 
     private List<Map<String, String>> parseJsonList(String jsonText) {
@@ -352,7 +394,7 @@ public class GeminiServiceImpl implements GeminiService {
                 if (list != null && !list.isEmpty()) return list;
             }
         } catch (Exception e4) {
-            log.warn("Failed to parse Gemini response as JSON list or objects: {}", e4.getMessage());
+            log.warn("Failed to parse Gemini response as JSON list or objects: {}", e4.getClass().getSimpleName());
         }
 
         return Collections.emptyList();

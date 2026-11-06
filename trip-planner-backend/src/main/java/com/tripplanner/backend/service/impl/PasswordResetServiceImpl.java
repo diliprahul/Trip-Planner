@@ -6,11 +6,11 @@ import com.tripplanner.backend.repository.PasswordResetTokenRepository;
 import com.tripplanner.backend.repository.UserRepository;
 import com.tripplanner.backend.service.PasswordResetService;
 import com.tripplanner.backend.service.PasswordResetRequestResult;
+import com.tripplanner.backend.service.EmailDeliveryService;
+import com.tripplanner.backend.service.impl.PasswordResetPersistenceService.ResetRequestState;
 import com.tripplanner.backend.util.PasswordValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +19,8 @@ import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Arrays;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 @Service
@@ -28,40 +30,39 @@ public class PasswordResetServiceImpl implements PasswordResetService {
     private final UserRepository userRepository;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final PasswordEncoder passwordEncoder;
-    private final Optional<JavaMailSender> javaMailSender;
+    private final EmailDeliveryService emailDeliveryService;
+    private final PasswordResetPersistenceService persistenceService;
 
     private static final SecureRandom secureRandom = new SecureRandom();
     private static final int OTP_EXPIRY_MINUTES = 15;
     private static final int MAX_ATTEMPTS = 3;
-    private static final int RESEND_COOLDOWN_SECONDS = 60;
+    private static final ReentrantLock[] EMAIL_LOCKS = createLocks();
 
     @Override
-    @Transactional
     public PasswordResetRequestResult requestPasswordReset(String email) {
         if (email == null || email.isBlank()) {
             return PasswordResetRequestResult.EMAIL_NOT_FOUND;
         }
         String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
-        Optional<User> userOpt = userRepository.findByEmail(normalizedEmail);
-        if (userOpt.isEmpty()) {
-            return PasswordResetRequestResult.EMAIL_NOT_FOUND;
+        ReentrantLock lock = EMAIL_LOCKS[Math.floorMod(normalizedEmail.hashCode(), EMAIL_LOCKS.length)];
+        lock.lock();
+        try {
+            return requestPasswordResetLocked(normalizedEmail);
+        } finally {
+            lock.unlock();
         }
+    }
 
-        User user = userOpt.get();
-        // Do not allow Google-only accounts to reset local password unless supported
-        if (user.getProvider() != null && !"LOCAL".equalsIgnoreCase(user.getProvider())) {
-            log.warn("Password reset attempted for non-local account: {}", normalizedEmail);
-            return PasswordResetRequestResult.UNSUPPORTED_ACCOUNT;
+    private PasswordResetRequestResult requestPasswordResetLocked(String normalizedEmail) {
+        LocalDateTime requestedAt = LocalDateTime.now();
+        ResetRequestState state;
+        try {
+            state = persistenceService.requestState(normalizedEmail, requestedAt);
+        } catch (RuntimeException exception) {
+            log.error("password reset lookup failed; exceptionType={}", exception.getClass().getSimpleName());
+            return PasswordResetRequestResult.DELIVERY_FAILED;
         }
-
-        // Check for existing token & resend cooldown
-        Optional<PasswordResetToken> existingTokenOpt = passwordResetTokenRepository.findByEmail(normalizedEmail);
-        if (existingTokenOpt.isPresent()) {
-            PasswordResetToken existingToken = existingTokenOpt.get();
-            if (existingToken.getCreatedAt().plusSeconds(RESEND_COOLDOWN_SECONDS).isAfter(LocalDateTime.now())) {
-                return PasswordResetRequestResult.COOLDOWN_ACTIVE;
-            }
-        }
+        if (state.result() != PasswordResetRequestResult.SENT) return state.result();
 
         // Generate 6-digit secure OTP
         int otpVal = 100000 + secureRandom.nextInt(900000);
@@ -79,10 +80,16 @@ public class PasswordResetServiceImpl implements PasswordResetService {
             return PasswordResetRequestResult.DELIVERY_FAILED;
         }
 
-        // Replace an older token only after SMTP accepts the new message.
-        existingTokenOpt.ifPresent(passwordResetTokenRepository::delete);
-        passwordResetTokenRepository.save(resetToken);
-        return PasswordResetRequestResult.SENT;
+        try {
+            PasswordResetRequestResult persisted = persistenceService.persistToken(
+                    resetToken, state.snapshot(), LocalDateTime.now());
+            return persisted == PasswordResetRequestResult.SENT
+                    ? PasswordResetRequestResult.SENT : PasswordResetRequestResult.DELIVERY_FAILED;
+        } catch (RuntimeException exception) {
+            log.error("password reset persistence failed after email delivery; exceptionType={}",
+                    exception.getClass().getSimpleName());
+            return PasswordResetRequestResult.DELIVERY_FAILED;
+        }
     }
 
     @Override
@@ -170,25 +177,22 @@ public class PasswordResetServiceImpl implements PasswordResetService {
 
         // Invalidate token after success
         passwordResetTokenRepository.deleteByEmail(normalizedEmail);
-        log.info("Password successfully reset for user: {}", normalizedEmail);
+        log.info("Password reset completed successfully");
     }
 
     private boolean sendOtpEmail(String email, String otp) {
-        if (javaMailSender.isEmpty()) {
-            log.error("JavaMailSender is not configured; cannot send password reset email to {}", email);
-            return false;
-        }
         try {
-            SimpleMailMessage message = new SimpleMailMessage();
-            message.setTo(email);
-            message.setSubject("TripPlanner Password Reset OTP");
-            message.setText("Your TripPlanner password reset verification code is: " + otp + "\nThis code will expire in " + OTP_EXPIRY_MINUTES + " minutes.\nIf you did not request this, please ignore this email.");
-            javaMailSender.get().send(message);
-            log.info("Password reset OTP email sent successfully to {}", email);
-            return true;
-        } catch (org.springframework.mail.MailException e) {
-            log.error("SMTP failed to accept password reset email for {}", email);
+            return emailDeliveryService.send(email, "TripPlanner Password Reset OTP",
+                    "Your TripPlanner password reset verification code is: " + otp + "\nThis code will expire in " + OTP_EXPIRY_MINUTES + " minutes.\nIf you did not request this, please ignore this email.");
+        } catch (RuntimeException exception) {
+            log.error("password reset email delivery failed; exceptionType={}", exception.getClass().getSimpleName());
             return false;
         }
+    }
+
+    private static ReentrantLock[] createLocks() {
+        ReentrantLock[] locks = new ReentrantLock[128];
+        Arrays.setAll(locks, ignored -> new ReentrantLock());
+        return locks;
     }
 }

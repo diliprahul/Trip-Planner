@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -43,7 +44,7 @@ class AccountDeletionIntegrationTest {
     void incorrectLocalDeletionPasswordReturnsStructured401AndKeepsAccount() throws Exception {
         MockHttpSession session = loginLocal("local@example.com", "correct123");
 
-        mockMvc.perform(delete("/api/auth/account").session(session).contentType(MediaType.APPLICATION_JSON)
+        mockMvc.perform(delete("/api/auth/account").with(csrf()).session(session).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"password\":\"wrong-password\",\"confirmed\":true}"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("INCORRECT_PASSWORD"))
@@ -58,7 +59,7 @@ class AccountDeletionIntegrationTest {
         MockHttpSession aliceSession = loginLocal("alice@example.com", "correct123");
         loginLocal("bob@example.com", "another123");
 
-        mockMvc.perform(delete("/api/auth/account").session(aliceSession).contentType(MediaType.APPLICATION_JSON)
+        mockMvc.perform(delete("/api/auth/account").with(csrf()).session(aliceSession).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"password\":\"correct123\",\"confirmed\":true}"))
                 .andExpect(status().isNoContent());
 
@@ -72,7 +73,7 @@ class AccountDeletionIntegrationTest {
         User google = userService.processOAuthPostLogin("GOOGLE", "subject-1", "google@example.com", "Google", true);
         MockHttpSession session = loginAsExistingGoogleUser(google.getEmail());
 
-        mockMvc.perform(delete("/api/auth/account").session(session).contentType(MediaType.APPLICATION_JSON)
+        mockMvc.perform(delete("/api/auth/account").with(csrf()).session(session).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"confirmed\":true}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("GOOGLE_REAUTHENTICATION_REQUIRED"));
@@ -80,7 +81,7 @@ class AccountDeletionIntegrationTest {
 
         session.setAttribute(AccountDeletionOAuthSuccessHandler.DELETE_REAUTH_EMAIL, "google@example.com");
         session.setAttribute(AccountDeletionOAuthSuccessHandler.DELETE_REAUTH_AT, Instant.now().toEpochMilli());
-        mockMvc.perform(delete("/api/auth/account").session(session).contentType(MediaType.APPLICATION_JSON)
+        mockMvc.perform(delete("/api/auth/account").with(csrf()).session(session).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"confirmed\":true}"))
                 .andExpect(status().isNoContent());
         assertFalse(userRepository.existsByEmail("google@example.com"));
@@ -109,7 +110,7 @@ class AccountDeletionIntegrationTest {
             return session;
         }
         LoginRequest request = new LoginRequest(); request.setEmail(email); request.setPassword(password);
-        MvcResult result = mockMvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
+        MvcResult result = mockMvc.perform(post("/api/auth/login").with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk()).andReturn();
         return (MockHttpSession) result.getRequest().getSession();
