@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTrip } from "../context/useTrip";
 import { useAuth } from "../context/useAuth";
-import { getTripById, generateItinerary, backfillCoordinates } from "../api/tripApi";
+import { getTripById, getTripWeather, generateItinerary, backfillCoordinates } from "../api/tripApi";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import WeatherForecast from "./WeatherForecast";
@@ -54,6 +54,8 @@ const Itinerary = () => {
   const { tripId } = useParams();
   const { loading: authLoading, isAuthenticated } = useAuth();
   const [fetching, setFetching] = useState(false);
+  const [weatherResponse, setWeatherResponse] = useState(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
 
@@ -98,6 +100,29 @@ const Itinerary = () => {
       navigate("/my-trips", { replace: true });
     }
   }, [tripId, itinerary, authLoading, isAuthenticated, setItinerary, navigate]);
+
+  useEffect(() => {
+    if (authLoading || !isAuthenticated || !itinerary?.id) return undefined;
+    let cancelled = false;
+    setWeatherResponse(null);
+    setWeatherLoading(true);
+    getTripWeather(itinerary.id)
+      .then((response) => {
+        if (!cancelled) setWeatherResponse(response);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWeatherResponse({
+            status: "API_ERROR",
+            message: "Weather information could not be loaded at the moment.",
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setWeatherLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [itinerary?.id, itinerary?.latitude, itinerary?.longitude, itinerary?.startDate, itinerary?.endDate, authLoading, isAuthenticated]);
 
   if (authLoading || fetching) {
     return (
@@ -262,9 +287,8 @@ const Itinerary = () => {
         </aside>
 
         {/* SECTION 2: WEATHER */}
-        {itinerary.weatherResponse && (
-          <WeatherForecast weatherResponse={itinerary.weatherResponse} />
-        )}
+        {weatherLoading && <p role="status" style={{ marginTop: "32px", textAlign: "center", color: "var(--text-secondary)" }}>Loading weather forecast...</p>}
+        {weatherResponse && <WeatherForecast weatherResponse={weatherResponse} />}
 
         {/* SECTION 3: ITINERARY */}
         <h2 style={{ marginTop: "56px", marginBottom: "24px", fontSize: "24px", color: "var(--text-primary)", fontFamily: "var(--font-heading)" }}>

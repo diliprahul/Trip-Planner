@@ -4,14 +4,9 @@ import com.tripplanner.backend.dto.TripDetailResponse;
 import com.tripplanner.backend.entity.DayPlan;
 import com.tripplanner.backend.entity.Trip;
 import com.tripplanner.backend.entity.User;
-import com.tripplanner.backend.repository.DayPlanRepository;
-import com.tripplanner.backend.repository.HotelSuggestionRepository;
-import com.tripplanner.backend.repository.TripRepository;
-import com.tripplanner.backend.repository.UserRepository;
 import com.tripplanner.backend.service.GeocodingService;
 import com.tripplanner.backend.service.GeminiService;
 import com.tripplanner.backend.service.OverpassService;
-import com.tripplanner.backend.service.WeatherService;
 import com.tripplanner.backend.util.GeoLocation;
 import com.tripplanner.backend.util.PlaceResult;
 import org.mockito.ArgumentCaptor;
@@ -24,6 +19,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -33,27 +34,19 @@ import static org.mockito.Mockito.*;
 class TripServiceImplTest {
 
     private TripServiceImpl tripService;
-    private TripRepository tripRepo;
-    private UserRepository userRepo;
-    private DayPlanRepository dayRepo;
-    private HotelSuggestionRepository hotelRepo;
+    private TripPersistenceService persistenceService;
     private GeocodingService geoService;
     private OverpassService overpassService;
-    private WeatherService weatherService;
     private GeminiService geminiService;
 
     @BeforeEach
     void setUp() {
-        tripRepo = Mockito.mock(TripRepository.class);
-        userRepo = Mockito.mock(UserRepository.class);
-        dayRepo = Mockito.mock(DayPlanRepository.class);
-        hotelRepo = Mockito.mock(HotelSuggestionRepository.class);
+        persistenceService = Mockito.mock(TripPersistenceService.class);
         geoService = Mockito.mock(GeocodingService.class);
         overpassService = Mockito.mock(OverpassService.class);
-        weatherService = Mockito.mock(WeatherService.class);
         geminiService = Mockito.mock(GeminiService.class);
 
-        tripService = new TripServiceImpl(tripRepo, userRepo, dayRepo, hotelRepo, geoService, overpassService, weatherService, geminiService);
+        tripService = new TripServiceImpl(persistenceService, geoService, overpassService, geminiService, Runnable::run);
     }
 
     @Test
@@ -235,8 +228,8 @@ class TripServiceImplTest {
                 .toList();
         AtomicReference<List<DayPlan>> savedPlans = new AtomicReference<>(List.of());
 
-        when(tripRepo.findById(906L)).thenReturn(Optional.of(trip));
-        when(userRepo.findByEmail("owner@example.com")).thenReturn(Optional.of(user));
+        when(persistenceService.loadTrip(906L, "owner@example.com"))
+                .thenReturn(new TripDataBundle(trip, List.of(), List.of()));
         when(overpassService.getTouristPlaces(anyDouble(), anyDouble(), anyInt())).thenReturn(List.of());
         when(overpassService.getHotels(anyDouble(), anyDouble())).thenReturn(List.of());
         when(geminiService.generateItinerary("Vijayawada", 10)).thenReturn(attractions);
@@ -245,12 +238,11 @@ class TripServiceImplTest {
             int number = Integer.parseInt(query.replaceAll(".*Attraction (\\d+).*", "$1"));
             return new GeoLocation(16.40 + number / 100.0, 80.50 + number / 100.0);
         });
-        doAnswer(invocation -> {
-            savedPlans.set(List.copyOf(invocation.getArgument(0)));
-            return savedPlans.get();
-        }).when(dayRepo).saveAll(any());
-        when(dayRepo.findByTripOrderByDayNumberAsc(trip)).thenAnswer(invocation -> savedPlans.get());
-        when(hotelRepo.findByTrip(trip)).thenReturn(List.of());
+        when(persistenceService.replaceGeneratedData(eq(906L), eq("owner@example.com"), anyDouble(), anyDouble(), any(), any()))
+                .thenAnswer(invocation -> {
+                    savedPlans.set(List.copyOf(invocation.getArgument(4)));
+                    return new TripDataBundle(trip, savedPlans.get(), List.of());
+                });
 
         TripDetailResponse response = tripService.generateItinerary(906L, "owner@example.com");
 
@@ -267,13 +259,11 @@ class TripServiceImplTest {
         Trip trip = Trip.builder()
                 .id(906L).user(user).destination("Vijayawada").days(1)
                 .latitude(16.5062).longitude(80.6480).build();
-        DayPlan plan = DayPlan.builder().trip(trip).dayNumber(1)
+        DayPlan plan = DayPlan.builder().id(111L).trip(trip).dayNumber(1)
                 .placeName("Kanaka Durga Temple").description("Temple visit").build();
 
-        when(tripRepo.findById(906L)).thenReturn(Optional.of(trip));
-        when(userRepo.findByEmail("owner@example.com")).thenReturn(Optional.of(user));
-        when(dayRepo.findByTripOrderByDayNumberAsc(trip)).thenReturn(List.of(plan));
-        when(hotelRepo.findByTrip(trip)).thenReturn(List.of());
+        when(persistenceService.loadTrip(906L, "owner@example.com"))
+                .thenReturn(new TripDataBundle(trip, List.of(plan), List.of()));
         when(geoService.geocodeAttraction("Kanaka Durga Temple", "Vijayawada"))
                 .thenReturn(new GeoLocation(16.5150, 80.6100));
 
@@ -281,9 +271,59 @@ class TripServiceImplTest {
         assertNull(response.getDayPlans().get(0).getLatitude());
         var report = tripService.backfillCoordinates(906L, "owner@example.com", false);
 
-        assertEquals(16.5150, plan.getLatitude());
-        assertEquals(80.6100, plan.getLongitude());
         assertEquals(1, report.getUpdated());
-        verify(dayRepo).save(plan);
+        ArgumentCaptor<Map<Long, GeoLocation>> locationCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(persistenceService).applyCoordinateBackfill(eq(906L), eq("owner@example.com"),
+                locationCaptor.capture(), anyMap(), anySet());
+        assertEquals(16.5150, locationCaptor.getValue().get(111L).getLatitude());
+        assertEquals(80.6100, locationCaptor.getValue().get(111L).getLongitude());
+    }
+
+    @Test
+    void concurrentRequestsForSameTripDoNotRunExternalGenerationInParallel() throws Exception {
+        User user = User.builder().id(1L).email("owner@example.com").name("Owner").build();
+        Trip trip = Trip.builder().id(906L).user(user).destination("Vijayawada").days(1)
+                .latitude(16.5062).longitude(80.6480).build();
+        when(persistenceService.loadTrip(906L, "owner@example.com"))
+                .thenReturn(new TripDataBundle(trip, List.of(), List.of()));
+        when(persistenceService.replaceGeneratedData(eq(906L), eq("owner@example.com"), anyDouble(), anyDouble(), any(), any()))
+                .thenReturn(new TripDataBundle(trip, List.of(), List.of()));
+
+        CountDownLatch firstExternalCallStarted = new CountDownLatch(1);
+        CountDownLatch allowFirstExternalCallToFinish = new CountDownLatch(1);
+        AtomicInteger activeCalls = new AtomicInteger();
+        AtomicInteger maxActiveCalls = new AtomicInteger();
+        when(overpassService.getTouristPlaces(anyDouble(), anyDouble(), anyInt())).thenAnswer(invocation -> {
+            int active = activeCalls.incrementAndGet();
+            maxActiveCalls.accumulateAndGet(active, Math::max);
+            firstExternalCallStarted.countDown();
+            try {
+                allowFirstExternalCallToFinish.await(5, TimeUnit.SECONDS);
+                return List.of();
+            } finally {
+                activeCalls.decrementAndGet();
+            }
+        });
+        when(overpassService.getHotels(anyDouble(), anyDouble())).thenReturn(List.of());
+
+        ExecutorService requests = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> first = requests.submit(() -> tripService.generateItinerary(906L, "owner@example.com"));
+            assertTrue(firstExternalCallStarted.await(2, TimeUnit.SECONDS));
+            Future<?> second = requests.submit(() -> tripService.generateItinerary(906L, "owner@example.com"));
+            Thread.sleep(100);
+            verify(persistenceService, times(1)).loadTrip(906L, "owner@example.com");
+
+            allowFirstExternalCallToFinish.countDown();
+            first.get(5, TimeUnit.SECONDS);
+            second.get(5, TimeUnit.SECONDS);
+        } finally {
+            allowFirstExternalCallToFinish.countDown();
+            requests.shutdownNow();
+        }
+
+        assertEquals(1, maxActiveCalls.get());
+        verify(persistenceService, times(2)).replaceGeneratedData(
+                eq(906L), eq("owner@example.com"), anyDouble(), anyDouble(), any(), any());
     }
 }

@@ -12,6 +12,8 @@ import com.tripplanner.backend.repository.TripRepository;
 import com.tripplanner.backend.repository.DayPlanRepository;
 import com.tripplanner.backend.repository.HotelSuggestionRepository;
 import com.tripplanner.backend.repository.PendingRegistrationRepository;
+import com.tripplanner.backend.service.EmailDeliveryService;
+import com.tripplanner.backend.service.impl.PasswordResetPersistenceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -19,12 +21,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.http.MediaType;
-import org.springframework.mail.MailSendException;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.LocalDateTime;
 
@@ -32,12 +33,14 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 class PasswordResetIntegrationTest {
+    private static final String GENERIC_RESET_MESSAGE = "If an account is eligible for password reset, instructions will be sent.";
     @Autowired private MockMvc mockMvc;
     @Autowired private UserRepository userRepository;
     @Autowired private TripRepository tripRepository;
@@ -45,9 +48,10 @@ class PasswordResetIntegrationTest {
     @Autowired private HotelSuggestionRepository hotelSuggestionRepository;
     @Autowired private PendingRegistrationRepository pendingRegistrationRepository;
     @Autowired private PasswordResetTokenRepository passwordResetTokenRepository;
+    @SpyBean private PasswordResetPersistenceService passwordResetPersistenceService;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private ObjectMapper objectMapper;
-    @MockBean private JavaMailSender javaMailSender;
+    @MockBean private EmailDeliveryService emailDeliveryService;
 
     @BeforeEach
     void setUp() {
@@ -57,18 +61,20 @@ class PasswordResetIntegrationTest {
         dayPlanRepository.deleteAll();
         tripRepository.deleteAll();
         userRepository.deleteAll();
-        reset(javaMailSender);
+        reset(emailDeliveryService);
+        when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenReturn(true);
     }
 
     @Test
     void existingEmailSendsAndPersistsHashedOtp() throws Exception {
         createLocalUser("user@example.com");
 
-        requestReset(" User@Example.com ").andExpect(status().isOk());
+        requestReset(" User@Example.com ").andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(GENERIC_RESET_MESSAGE));
 
-        ArgumentCaptor<SimpleMailMessage> message = ArgumentCaptor.forClass(SimpleMailMessage.class);
-        verify(javaMailSender).send(message.capture());
-        assertArrayEquals(new String[]{"user@example.com"}, message.getValue().getTo());
+        ArgumentCaptor<String> recipient = ArgumentCaptor.forClass(String.class);
+        verify(emailDeliveryService).send(recipient.capture(), anyString(), anyString());
+        assertEquals("user@example.com", recipient.getValue());
         PasswordResetToken token = passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow();
         assertNotNull(token.getOtpHash());
         assertFalse(token.getOtpHash().matches("\\d{6}"));
@@ -77,26 +83,53 @@ class PasswordResetIntegrationTest {
     }
 
     @Test
-    void nonExistingEmailDoesNotSendOrPersistOtp() throws Exception {
-        requestReset("missing@example.com")
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message").value("No account exists with that email address."));
+    void emailDeliveryRunsOutsideDatabaseTransaction() throws Exception {
+        createLocalUser("outside-tx@example.com");
+        when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+            return true;
+        });
+        requestReset("outside-tx@example.com").andExpect(status().isOk());
+    }
 
-        verifyNoInteractions(javaMailSender);
+    @Test
+    void registeredAndUnregisteredEmailsReceiveIndistinguishableResponses() throws Exception {
+        createLocalUser("user@example.com");
+        var registeredResponse = requestReset("user@example.com").andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(GENERIC_RESET_MESSAGE)).andReturn().getResponse();
+        var missingResponse = requestReset("missing@example.com").andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(GENERIC_RESET_MESSAGE)).andReturn().getResponse();
+
+        assertEquals(registeredResponse.getStatus(), missingResponse.getStatus());
+        assertEquals(registeredResponse.getContentAsString(), missingResponse.getContentAsString());
+        verify(emailDeliveryService).send(anyString(), anyString(), anyString());
         assertTrue(passwordResetTokenRepository.findByEmail("missing@example.com").isEmpty());
     }
 
     @Test
-    void smtpFailureDoesNotPersistOtpOrReportSuccess() throws Exception {
+    void smtpFailureReturnsSameGenericResponseAndDoesNotPersistOtp() throws Exception {
         createLocalUser("user@example.com");
-        doThrow(new MailSendException("SMTP unavailable"))
-                .when(javaMailSender).send(any(SimpleMailMessage.class));
+        when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenReturn(false);
 
         requestReset("user@example.com")
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.message").value("We could not send the reset email. Please try again later."));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(GENERIC_RESET_MESSAGE));
 
-        verify(javaMailSender).send(any(SimpleMailMessage.class));
+        verify(emailDeliveryService).send(anyString(), anyString(), anyString());
+        assertTrue(passwordResetTokenRepository.findByEmail("user@example.com").isEmpty());
+    }
+
+    @Test
+    void persistenceFailureReturnsSameGenericResponseWithoutPersistingOtp() throws Exception {
+        createLocalUser("user@example.com");
+        doThrow(new IllegalStateException("sensitive persistence details"))
+                .when(passwordResetPersistenceService).persistToken(any(), any(), any());
+
+        requestReset("user@example.com")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(GENERIC_RESET_MESSAGE));
+
+        verify(emailDeliveryService).send(anyString(), anyString(), anyString());
         assertTrue(passwordResetTokenRepository.findByEmail("user@example.com").isEmpty());
     }
 
@@ -106,10 +139,65 @@ class PasswordResetIntegrationTest {
         requestReset("user@example.com").andExpect(status().isOk());
         Long firstTokenId = passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow().getId();
 
-        requestReset("user@example.com").andExpect(status().isTooManyRequests());
+        requestReset("user@example.com").andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(GENERIC_RESET_MESSAGE));
 
-        verify(javaMailSender, times(1)).send(any(SimpleMailMessage.class));
+        verify(emailDeliveryService, times(1)).send(anyString(), anyString(), anyString());
         assertEquals(firstTokenId, passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow().getId());
+    }
+
+    @Test
+    void resendDeliveryFailurePreservesExistingOtp() throws Exception {
+        createLocalUser("user@example.com");
+        requestReset("user@example.com").andExpect(status().isOk());
+        PasswordResetToken original = passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow();
+        original.setCreatedAt(LocalDateTime.now().minusMinutes(2));
+        passwordResetTokenRepository.save(original);
+        when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenReturn(false);
+
+        requestReset("user@example.com").andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(GENERIC_RESET_MESSAGE));
+        PasswordResetToken stillValid = passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow();
+        assertEquals(original.getId(), stillValid.getId());
+        assertEquals(original.getOtpHash(), stillValid.getOtpHash());
+    }
+
+    @Test
+    void resendAfterCooldownReplacesOtpAndRenewsExpiry() throws Exception {
+        createLocalUser("user@example.com");
+        requestReset("user@example.com").andExpect(status().isOk());
+        PasswordResetToken original = passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow();
+        original.setCreatedAt(LocalDateTime.now().minusMinutes(2));
+        passwordResetTokenRepository.saveAndFlush(original);
+
+        requestReset("user@example.com").andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(GENERIC_RESET_MESSAGE));
+        PasswordResetToken replacement = passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow();
+        assertNotEquals(original.getId(), replacement.getId());
+        assertNotEquals(original.getOtpHash(), replacement.getOtpHash());
+        assertTrue(replacement.getExpiryDate().isAfter(LocalDateTime.now().plusMinutes(14)));
+        verify(emailDeliveryService, times(2)).send(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void failedReplacementTransactionRollsBackDeletionOfPreviousResetOtp() {
+        createLocalUser("user@example.com");
+        PasswordResetToken original = PasswordResetToken.builder().email("user@example.com")
+                .otpHash(passwordEncoder.encode("123456"))
+                .expiryDate(LocalDateTime.now().plusMinutes(15)).attempts(0).build();
+        passwordResetTokenRepository.saveAndFlush(original);
+        original.setCreatedAt(LocalDateTime.now().minusMinutes(2));
+        passwordResetTokenRepository.saveAndFlush(original);
+        var state = passwordResetPersistenceService.requestState("user@example.com", LocalDateTime.now());
+        assertEquals(com.tripplanner.backend.service.PasswordResetRequestResult.SENT, state.result());
+        PasswordResetToken invalidReplacement = PasswordResetToken.builder().email("user@example.com")
+                .otpHash("x".repeat(300)).expiryDate(LocalDateTime.now().plusMinutes(15)).attempts(0).build();
+
+        assertThrows(DataIntegrityViolationException.class, () -> passwordResetPersistenceService.persistToken(
+                invalidReplacement, state.snapshot(), LocalDateTime.now()));
+        PasswordResetToken afterRollback = passwordResetTokenRepository.findByEmail("user@example.com").orElseThrow();
+        assertEquals(original.getId(), afterRollback.getId());
+        assertEquals(original.getOtpHash(), afterRollback.getOtpHash());
     }
 
     @Test
@@ -148,7 +236,7 @@ class PasswordResetIntegrationTest {
         request.setEmail("user@example.com");
         request.setOtp("123456");
         request.setNewPassword("new-secure-password1");
-        mockMvc.perform(post("/api/auth/reset-password")
+        mockMvc.perform(post("/api/auth/reset-password").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk());
@@ -156,7 +244,7 @@ class PasswordResetIntegrationTest {
         assertTrue(passwordEncoder.matches("new-secure-password1",
                 userRepository.findByEmail("user@example.com").orElseThrow().getPassword()));
         assertTrue(passwordResetTokenRepository.findByEmail("user@example.com").isEmpty());
-        mockMvc.perform(post("/api/auth/reset-password")
+        mockMvc.perform(post("/api/auth/reset-password").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest());
@@ -165,7 +253,7 @@ class PasswordResetIntegrationTest {
     private org.springframework.test.web.servlet.ResultActions requestReset(String email) throws Exception {
         ForgotPasswordRequest request = new ForgotPasswordRequest();
         request.setEmail(email);
-        return mockMvc.perform(post("/api/auth/forgot-password")
+        return mockMvc.perform(post("/api/auth/forgot-password").with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)));
     }
@@ -174,7 +262,7 @@ class PasswordResetIntegrationTest {
         VerifyResetOtpRequest request = new VerifyResetOtpRequest();
         request.setEmail(email);
         request.setOtp(otp);
-        return mockMvc.perform(post("/api/auth/verify-reset-otp")
+        return mockMvc.perform(post("/api/auth/verify-reset-otp").with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)));
     }

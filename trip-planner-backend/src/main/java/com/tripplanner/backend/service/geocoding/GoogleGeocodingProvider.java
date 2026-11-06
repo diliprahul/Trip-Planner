@@ -113,10 +113,10 @@ public class GoogleGeocodingProvider implements GeocodingProvider {
                 throw e;
             }
         } catch (ResourceAccessException e) {
-            log.warn("Google Geocoding network/timeout error: {}", e.getMessage());
+            log.warn("Google Geocoding network/timeout error: {}", e.getClass().getSimpleName());
             throw e;
         } catch (Exception e) {
-            log.warn("Google Geocoding exception: {}", e.getMessage());
+            log.warn("Google Geocoding exception: {}", e.getClass().getSimpleName());
             if (e instanceof RuntimeException re) throw re;
         }
 

@@ -8,6 +8,28 @@ const apiClient = axios.create({
   withCredentials: true,
 });
 
+let csrfToken = null;
+let csrfBootstrap = null;
+
+export const refreshCsrfToken = async () => {
+  csrfBootstrap ??= apiClient.get("/api/auth/csrf").then(({ data }) => {
+    csrfToken = data.token;
+    return csrfToken;
+  }).finally(() => {
+    csrfBootstrap = null;
+  });
+  return csrfBootstrap;
+};
+
+apiClient.interceptors.request.use(async (config) => {
+  const method = (config.method || "get").toLowerCase();
+  if (["post", "put", "patch", "delete"].includes(method)) {
+    const token = csrfToken || await refreshCsrfToken();
+    config.headers["X-CSRF-TOKEN"] = token;
+  }
+  return config;
+});
+
 export const registerUser = async (data) => {
   const response = await apiClient.post("/api/auth/register", data);
   return response.data;
@@ -15,6 +37,7 @@ export const registerUser = async (data) => {
 
 export const verifyRegistrationOtp = async (email, otp) => {
   const response = await apiClient.post("/api/auth/register/verify-otp", { email, otp });
+  await refreshCsrfToken();
   return response.data;
 };
 
@@ -25,11 +48,14 @@ export const resendRegistrationOtp = async (email) => {
 
 export const loginUser = async (data) => {
   const response = await apiClient.post("/api/auth/login", data);
+  await refreshCsrfToken();
   return response.data;
 };
 
 export const logoutUser = async () => {
   await apiClient.post("/api/auth/logout");
+  csrfToken = null;
+  await refreshCsrfToken();
 };
 
 export const getCurrentUser = async () => {
@@ -63,6 +89,7 @@ export const deleteProfilePicture = async () => {
 
 export const deleteAccount = async (password) => {
   await apiClient.delete("/api/auth/account", { data: { password, confirmed: true } });
+  csrfToken = null;
 };
 
 export const startGoogleAccountDeletionReauthentication = async () => {
@@ -97,6 +124,11 @@ export const generateItinerary = async (tripId) => {
 
 export const getTripById = async (tripId) => {
   const response = await apiClient.get(`/api/trips/${tripId}`);
+  return response.data;
+};
+
+export const getTripWeather = async (tripId) => {
+  const response = await apiClient.get(`/api/trips/${tripId}/weather`);
   return response.data;
 };
 

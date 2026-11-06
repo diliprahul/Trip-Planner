@@ -11,7 +11,10 @@ import com.tripplanner.backend.repository.TripRepository;
 import com.tripplanner.backend.repository.DayPlanRepository;
 import com.tripplanner.backend.repository.HotelSuggestionRepository;
 import com.tripplanner.backend.service.UserService;
+import com.tripplanner.backend.service.EmailDeliveryService;
 import com.tripplanner.backend.service.impl.PendingRegistrationCleanupService;
+import com.tripplanner.backend.service.impl.RegistrationPersistenceService;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,9 +22,6 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
-import org.springframework.mail.MailSendException;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
@@ -50,7 +51,8 @@ class RegistrationVerificationIntegrationTest {
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private UserService userService;
     @Autowired private PendingRegistrationCleanupService pendingRegistrationCleanupService;
-    @MockBean private JavaMailSender javaMailSender;
+    @Autowired private RegistrationPersistenceService registrationPersistenceService;
+    @MockBean private EmailDeliveryService emailDeliveryService;
 
     @BeforeEach void resetData() {
         pendingRepository.deleteAll();
@@ -58,17 +60,26 @@ class RegistrationVerificationIntegrationTest {
         dayPlanRepository.deleteAll();
         tripRepository.deleteAll();
         userRepository.deleteAll();
-        reset(javaMailSender);
+        reset(emailDeliveryService);
+        when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenReturn(true);
     }
 
     @Test void requestNormalizesEmailSendsOtpAndCreatesNoUser() throws Exception {
         register(" Alice@Example.COM ").andExpect(status().isOk());
-        verify(javaMailSender).send(any(SimpleMailMessage.class));
+        verify(emailDeliveryService).send(anyString(), anyString(), anyString());
         assertTrue(userRepository.findByEmail("alice@example.com").isEmpty());
         PendingRegistration pending = pendingRepository.findByEmail("alice@example.com").orElseThrow();
         assertFalse(pending.getOtpHash().matches("\\d{6}"));
         assertTrue(pending.getExpiryDate().isAfter(LocalDateTime.now().plusMinutes(4)));
         assertTrue(pending.getExpiryDate().isBefore(LocalDateTime.now().plusMinutes(6)));
+    }
+
+    @Test void emailDeliveryRunsOutsideDatabaseTransaction() throws Exception {
+        when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+            assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+            return true;
+        });
+        register("outside-tx@example.com").andExpect(status().isOk());
     }
 
     @Test void cleanupDeletesExpiredPendingRegistrationsOnly() {
@@ -90,7 +101,7 @@ class RegistrationVerificationIntegrationTest {
         register("existing@example.com").andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("EMAIL_ALREADY_EXISTS"))
                 .andExpect(jsonPath("$.message").value("Email already exists."));
-        verifyNoInteractions(javaMailSender);
+        verifyNoInteractions(emailDeliveryService);
     }
 
     @Test void duplicatePendingAndCooldownAreRejected() throws Exception {
@@ -99,7 +110,7 @@ class RegistrationVerificationIntegrationTest {
                 .andExpect(jsonPath("$.code").value("EMAIL_ALREADY_EXISTS"))
                 .andExpect(jsonPath("$.message").value("Email already exists."));
         resend("user@example.com").andExpect(status().isTooManyRequests());
-        verify(javaMailSender, times(1)).send(any(SimpleMailMessage.class));
+        verify(emailDeliveryService, times(1)).send(anyString(), anyString(), anyString());
     }
 
     @Test void expiredPendingRegistrationCanBeReplacedButValidOneCannot() throws Exception {
@@ -112,7 +123,7 @@ class RegistrationVerificationIntegrationTest {
         savePending("valid@example.com", "123456", LocalDateTime.now().plusMinutes(2), 0);
         register("valid@example.com").andExpect(status().isConflict());
         assertEquals(2, pendingRepository.count());
-        verify(javaMailSender, times(1)).send(any(SimpleMailMessage.class));
+        verify(emailDeliveryService, times(1)).send(anyString(), anyString(), anyString());
     }
 
     @Test void resendExtendsPendingOtpByFiveMinutes() throws Exception {
@@ -123,10 +134,37 @@ class RegistrationVerificationIntegrationTest {
         assertTrue(pending.getExpiryDate().isBefore(LocalDateTime.now().plusMinutes(6)));
     }
 
+    @Test void failedResendPreservesExistingRegistrationOtp() throws Exception {
+        savePending("user@example.com", "123456", LocalDateTime.now().plusMinutes(1), 0);
+        PendingRegistration original = pendingRepository.findByEmail("user@example.com").orElseThrow();
+        when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenReturn(false);
+
+        resend("user@example.com").andExpect(status().isServiceUnavailable());
+        PendingRegistration stillValid = pendingRepository.findByEmail("user@example.com").orElseThrow();
+        assertEquals(original.getOtpHash(), stillValid.getOtpHash());
+        assertEquals(original.getExpiryDate(), stillValid.getExpiryDate());
+    }
+
     @Test void smtpFailureDoesNotCreatePendingRegistration() throws Exception {
-        doThrow(new MailSendException("unavailable")).when(javaMailSender).send(any(SimpleMailMessage.class));
+        when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenReturn(false);
         register("user@example.com").andExpect(status().isServiceUnavailable());
         assertTrue(pendingRepository.findByEmail("user@example.com").isEmpty());
+    }
+
+    @Test void failedExpiredRegistrationReplacementRollsBackDeletion() {
+        LocalDateTime expiredAt = LocalDateTime.now().minusMinutes(1);
+        savePending("expired@example.com", "123456", expiredAt, 0);
+        PendingRegistration original = pendingRepository.findByEmail("expired@example.com").orElseThrow();
+        PendingRegistration invalidReplacement = PendingRegistration.builder()
+                .email("expired@example.com").name("New User").passwordHash(passwordEncoder.encode("password123"))
+                .otpHash("x".repeat(300)).expiryDate(LocalDateTime.now().plusMinutes(5)).attempts(0)
+                .lastSentAt(LocalDateTime.now()).build();
+
+        assertThrows(DataIntegrityViolationException.class, () -> registrationPersistenceService
+                .persistNewRegistration(invalidReplacement, LocalDateTime.now()));
+        PendingRegistration afterRollback = pendingRepository.findByEmail("expired@example.com").orElseThrow();
+        assertEquals(original.getId(), afterRollback.getId());
+        assertEquals(original.getOtpHash(), afterRollback.getOtpHash());
     }
 
     @Test void invalidExpiredAndMaximumAttemptOtpsDoNotCreateAccounts() throws Exception {
@@ -160,15 +198,15 @@ class RegistrationVerificationIntegrationTest {
 
     private org.springframework.test.web.servlet.ResultActions register(String email) throws Exception {
         RegisterRequest request = new RegisterRequest(); request.setName("Test User"); request.setEmail(email); request.setPassword("password123");
-        return mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)));
+        return mockMvc.perform(post("/api/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)));
     }
     private org.springframework.test.web.servlet.ResultActions resend(String email) throws Exception {
         RegistrationOtpRequest request = new RegistrationOtpRequest(); request.setEmail(email);
-        return mockMvc.perform(post("/api/auth/register/resend-otp").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)));
+        return mockMvc.perform(post("/api/auth/register/resend-otp").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)));
     }
     private org.springframework.test.web.servlet.ResultActions verifyOtp(String email, String otp) throws Exception {
         RegistrationOtpRequest request = new RegistrationOtpRequest(); request.setEmail(email); request.setOtp(otp);
-        return mockMvc.perform(post("/api/auth/register/verify-otp").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)));
+        return mockMvc.perform(post("/api/auth/register/verify-otp").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request)));
     }
     private void savePending(String email, String otp, LocalDateTime expiry, int attempts) {
         pendingRepository.save(PendingRegistration.builder().email(email).name("Test User").passwordHash(passwordEncoder.encode("password123"))

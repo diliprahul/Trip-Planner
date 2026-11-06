@@ -64,7 +64,7 @@ public class GeocodingServiceImpl implements GeocodingService {
         String cacheKey = type + "|" + normalizedQuery + "|" + normalize(expectedName) + "|" + normalize(destination);
         CacheEntry cached = cache.get(cacheKey);
         if (cached != null && cached.expiresAtMs() > System.currentTimeMillis()) {
-            log.debug("Geocoding cache hit for query='{}'", query);
+            log.debug("geocoding_stage={} outcome=cache_hit", type.toLowerCase(Locale.ROOT));
             return cached.location();
         }
 
@@ -82,17 +82,19 @@ public class GeocodingServiceImpl implements GeocodingService {
 
             try {
                 long providerStart = System.currentTimeMillis();
-                log.info("Attempting geocoding query='{}' with provider='{}'", query, providerName);
+                log.info("geocoding_stage={} provider={} outcome=started", type.toLowerCase(Locale.ROOT), providerName);
                 GeoLocation loc = provider.geocode(query, expectedName, destination, requireNamedPlace);
                 long duration = System.currentTimeMillis() - providerStart;
 
                 if (loc != null && valid(loc.getLatitude(), loc.getLongitude())) {
                     result = loc;
                     finalProvider = providerName;
-                    log.info("Successfully geocoded query='{}' using provider='{}' in {}ms -> {}", query, providerName, duration, result);
+                    log.info("geocoding_stage={} provider={} outcome=success duration_ms={}",
+                            type.toLowerCase(Locale.ROOT), providerName, duration);
                     break;
                 } else {
-                    log.warn("Provider='{}' returned no valid or relevant result for query='{}'", providerName, query);
+                    log.warn("geocoding_stage={} provider={} outcome=unresolved duration_ms={}",
+                            type.toLowerCase(Locale.ROOT), providerName, duration);
                 }
             } catch (HttpStatusCodeException e) {
                 int status = e.getStatusCode() != null ? e.getStatusCode().value() : 500;
@@ -101,10 +103,12 @@ public class GeocodingServiceImpl implements GeocodingService {
                     transientErrorEncountered = true;
                 }
             } catch (ResourceAccessException e) {
-                log.warn("Provider='{}' network/timeout error: {}", providerName, e.getMessage());
+                log.warn("geocoding_stage={} provider={} outcome=network_error exception_type={}",
+                        type.toLowerCase(Locale.ROOT), providerName, e.getClass().getSimpleName());
                 transientErrorEncountered = true;
             } catch (Exception e) {
-                log.warn("Provider='{}' threw exception: {}", providerName, e.getMessage());
+                log.warn("geocoding_stage={} provider={} outcome=exception exception_type={}",
+                        type.toLowerCase(Locale.ROOT), providerName, e.getClass().getSimpleName());
                 transientErrorEncountered = true;
             }
         }
@@ -115,10 +119,12 @@ public class GeocodingServiceImpl implements GeocodingService {
         } else if (!transientErrorEncountered) {
             cache.put(cacheKey, new CacheEntry(null, System.currentTimeMillis() + NEGATIVE_TTL_MS));
         } else {
-            log.debug("Skipping negative cache for query='{}' due to transient provider error", query);
+            log.debug("geocoding_stage={} outcome=negative_cache_skipped reason=transient_provider_error",
+                    type.toLowerCase(Locale.ROOT));
         }
 
-        log.info("Geocoding complete for query='{}' (provider='{}', totalTime={}ms, resolved={})", query, finalProvider, totalDuration, result != null);
+        log.info("geocoding_stage={} provider={} outcome={} duration_ms={}",
+                type.toLowerCase(Locale.ROOT), finalProvider, result == null ? "unresolved" : "success", totalDuration);
         return result;
     }
 

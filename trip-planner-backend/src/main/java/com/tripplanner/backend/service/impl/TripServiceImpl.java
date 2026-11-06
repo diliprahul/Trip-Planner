@@ -6,58 +6,48 @@ import com.tripplanner.backend.repository.*;
 import com.tripplanner.backend.service.*;
 import com.tripplanner.backend.util.GeoLocation;
 import com.tripplanner.backend.util.PlaceResult;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor
-@Transactional
 @Slf4j
 public class TripServiceImpl implements TripService {
 
-    private final TripRepository tripRepository;
-    private final UserRepository userRepository;
-    private final DayPlanRepository dayPlanRepository;
-    private final HotelSuggestionRepository hotelSuggestionRepository;
+    private final TripPersistenceService persistenceService;
     private final GeocodingService geocodingService;
     private final OverpassService overpassService;
-    private final WeatherService weatherService;
     private final GeminiService geminiService;
+    private final Executor itineraryExternalExecutor;
+    private static final ReentrantLock[] GENERATION_LOCKS = createGenerationLocks();
+
+    public TripServiceImpl(TripPersistenceService persistenceService, GeocodingService geocodingService,
+                           OverpassService overpassService, GeminiService geminiService,
+                           @Qualifier("itineraryExternalExecutor") Executor itineraryExternalExecutor) {
+        this.persistenceService = persistenceService;
+        this.geocodingService = geocodingService;
+        this.overpassService = overpassService;
+        this.geminiService = geminiService;
+        this.itineraryExternalExecutor = itineraryExternalExecutor;
+    }
 
     private static final String CURRENCY = "INR";
 
-    private User resolveUser(String userEmail) {
-        if (userEmail == null || userEmail.isBlank() || "anonymousUser".equals(userEmail)) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.UNAUTHORIZED, "Authentication required"
-            );
-        }
-        String normalizedEmail = userEmail.trim().toLowerCase();
-        return userRepository.findByEmail(normalizedEmail)
-                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
-                        org.springframework.http.HttpStatus.NOT_FOUND, "User not found"
-                ));
+    private static ReentrantLock[] createGenerationLocks() {
+        ReentrantLock[] locks = new ReentrantLock[64];
+        Arrays.setAll(locks, ignored -> new ReentrantLock());
+        return locks;
     }
 
-    private void validateOwnership(Trip trip, String userEmail) {
-        User user = resolveUser(userEmail);
-        if (trip.getUser() == null) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.NOT_FOUND, "Trip not found"
-            );
-        }
-        if (!trip.getUser().getId().equals(user.getId())) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.FORBIDDEN, "Access denied: You do not own this trip"
-            );
-        }
+    private long elapsedMillis(long startedAtNanos) {
+        return (System.nanoTime() - startedAtNanos) / 1_000_000;
     }
 
     // =========================================================
@@ -65,11 +55,6 @@ public class TripServiceImpl implements TripService {
     // =========================================================
     @Override
     public TripDetailResponse createTrip(CreateTripRequest request, String userEmail) {
-        log.info("CreateTripRequest: origin={}, destination={}, startDate={}, endDate={}, user={}",
-            request.getOrigin(), request.getDestination(), request.getStartDate(), request.getEndDate(), userEmail);
-
-        User user = resolveUser(userEmail);
-
         if (request.getEndDate() == null || request.getStartDate() == null) {
              throw new RuntimeException("Dates must not be null");
         }
@@ -79,25 +64,8 @@ public class TripServiceImpl implements TripService {
         }
 
 
-        long days = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) + 1;
-
-        List<String> categories = request.getPlaceCategories() != null
-                ? new ArrayList<>(request.getPlaceCategories())
-                : new ArrayList<>();
-
-        Trip trip = tripRepository.save(
-                Trip.builder()
-                        .user(user)
-                        .origin(request.getOrigin())
-                        .destination(request.getDestination())
-                        .startDate(request.getStartDate())
-                        .endDate(request.getEndDate())
-                        .days((int) days)
-                        .placeCategories(categories)
-                        .build()
-        );
-
-        return map(trip, List.of(), List.of());
+        TripDataBundle trip = persistenceService.createTrip(request, userEmail);
+        return map(trip.trip(), trip.dayPlans(), trip.hotels());
     }
 
     // =========================================================
@@ -105,21 +73,35 @@ public class TripServiceImpl implements TripService {
     // =========================================================
     @Override
     public TripDetailResponse generateItinerary(Long tripId, String userEmail) {
+        ReentrantLock generationLock = GENERATION_LOCKS[Math.floorMod(Long.hashCode(tripId), GENERATION_LOCKS.length)];
+        generationLock.lock();
+        try {
+            return generateItineraryLocked(tripId, userEmail);
+        } finally {
+            generationLock.unlock();
+        }
+    }
 
-        Trip trip = tripRepository.findById(tripId)
-                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
-                        org.springframework.http.HttpStatus.NOT_FOUND, "Trip not found"
-                ));
-
-        validateOwnership(trip, userEmail);
-
-        dayPlanRepository.deleteByTrip(trip);
-        hotelSuggestionRepository.deleteByTrip(trip);
+    private TripDetailResponse generateItineraryLocked(Long tripId, String userEmail) {
+        long generationStarted = System.nanoTime();
+        Trip trip = persistenceService.loadTrip(tripId, userEmail).trip();
 
         // ================= GEO =================
-        if (trip.getLatitude() == null || trip.getLongitude() == null) {
+        Double latitude = trip.getLatitude();
+        Double longitude = trip.getLongitude();
+        if (latitude == null || longitude == null) {
+            long geocodeStarted = System.nanoTime();
 
-            GeoLocation loc = geocodingService.geocodeCity(trip.getDestination());
+            GeoLocation loc;
+            try {
+                loc = geocodingService.geocodeCity(trip.getDestination());
+                log.info("itinerary_stage=destination_geocoding outcome={} duration_ms={}",
+                        isUsableLocation(loc) ? "success" : "unresolved", elapsedMillis(geocodeStarted));
+            } catch (RuntimeException exception) {
+                log.info("itinerary_stage=destination_geocoding outcome=failure exception_type={} duration_ms={}",
+                        exception.getClass().getSimpleName(), elapsedMillis(geocodeStarted));
+                throw exception;
+            }
 
             if (!isUsableLocation(loc)) {
                 throw new org.springframework.web.server.ResponseStatusException(
@@ -128,21 +110,25 @@ public class TripServiceImpl implements TripService {
                 );
             }
 
-            trip.setLatitude(loc.getLatitude());
-            trip.setLongitude(loc.getLongitude());
-            tripRepository.save(trip);
+            latitude = loc.getLatitude();
+            longitude = loc.getLongitude();
         }
+        trip.setLatitude(latitude);
+        trip.setLongitude(longitude);
 
         int days = Math.max(1, Optional.ofNullable(trip.getDays()).orElse(1));
 
         long osmStartedAt = System.nanoTime();
-        CompletableFuture<List<PlaceResult>> placesFuture = CompletableFuture.supplyAsync(() -> fetchPlacesSafely(trip, days));
-        CompletableFuture<List<PlaceResult>> hotelsFuture = CompletableFuture.supplyAsync(() -> fetchHotelsSafely(trip));
+        CompletableFuture<List<PlaceResult>> placesFuture = CompletableFuture.supplyAsync(
+                () -> fetchPlacesSafely(trip, days), itineraryExternalExecutor);
+        CompletableFuture<List<PlaceResult>> hotelsFuture = CompletableFuture.supplyAsync(
+                () -> fetchHotelsSafely(trip), itineraryExternalExecutor);
 
         List<PlaceResult> candidates = selectUsefulPlaces(placesFuture.join(), trip);
 
         if (candidates.isEmpty()) {
-            log.info("Overpass returned no valid places for destination: {}. Attempting Gemini AI fallback...", trip.getDestination());
+            log.info("itinerary_stage=gemini_places_fallback outcome=started");
+            long geminiStarted = System.nanoTime();
             try {
                 List<Map<String, String>> geminiPlaces = geminiService.generateItinerary(trip.getDestination(), days);
                 if (geminiPlaces != null && !geminiPlaces.isEmpty()) {
@@ -160,10 +146,12 @@ public class TripServiceImpl implements TripService {
                             })
                             .filter(p -> p.getName() != null && !p.getName().isBlank())
                             .toList();
-                    log.info("Gemini fallback provided {} attractions for {}", candidates.size(), trip.getDestination());
+                    log.info("itinerary_stage=gemini_places_fallback outcome=success result_count={} duration_ms={}",
+                            candidates.size(), elapsedMillis(geminiStarted));
                 }
             } catch (Exception e) {
-                log.warn("Gemini fallback generation failed for {}: {}", trip.getDestination(), e.getMessage());
+                log.warn("itinerary_stage=gemini_places_fallback outcome=failure exception_type={} duration_ms={}",
+                        e.getClass().getSimpleName(), elapsedMillis(geminiStarted));
             }
         }
 
@@ -182,15 +170,12 @@ public class TripServiceImpl implements TripService {
                     .longitude(place.getLongitude())
                     .build());
         }
-        if (plans.isEmpty()) log.warn("No named tourist places or fallback suggestions were returned for {}", trip.getDestination());
-
-        dayPlanRepository.saveAll(plans);
+        if (plans.isEmpty()) log.warn("itinerary_stage=place_selection outcome=empty");
 
         // ================= HOTELS =================
 
         List<PlaceResult> hotelPlaces = hotelsFuture.join();
-        log.info("OSM places and hotels for {} completed in {} ms", trip.getDestination(),
-                (System.nanoTime() - osmStartedAt) / 1_000_000);
+        log.info("itinerary_stage=overpass_places_and_hotels outcome=completed duration_ms={}", elapsedMillis(osmStartedAt));
 
         List<HotelSuggestion> hotels =
                 hotelPlaces.stream()
@@ -227,13 +212,15 @@ public class TripServiceImpl implements TripService {
                         })
                         .toList();
             } catch (Exception e) {
-                log.warn("Gemini hotel fallback failed for {}: {}", trip.getDestination(), e.getMessage());
+                log.warn("itinerary_stage=gemini_hotels_fallback outcome=failure exception_type={}", e.getClass().getSimpleName());
             }
         }
 
-        hotelSuggestionRepository.saveAll(hotels);
-
-        return getTripById(tripId, userEmail);
+        long persistenceStarted = System.nanoTime();
+        TripDataBundle saved = persistenceService.replaceGeneratedData(tripId, userEmail, latitude, longitude, plans, hotels);
+        log.info("itinerary_stage=persistence outcome=success duration_ms={}", elapsedMillis(persistenceStarted));
+        log.info("itinerary_generation outcome=success duration_ms={}", elapsedMillis(generationStarted));
+        return map(saved.trip(), saved.dayPlans(), saved.hotels());
     }
 
     // =========================================================
@@ -241,26 +228,18 @@ public class TripServiceImpl implements TripService {
     // =========================================================
     @Override
     public TripDetailResponse getTripById(Long id, String userEmail) {
-
-        Trip trip = tripRepository.findById(id)
-                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
-                        org.springframework.http.HttpStatus.NOT_FOUND, "Trip not found"
-                ));
-
-        validateOwnership(trip, userEmail);
-
-        List<DayPlan> plans = dayPlanRepository.findByTripOrderByDayNumberAsc(trip);
-        return map(
-                trip,
-                plans,
-                hotelSuggestionRepository.findByTrip(trip)
-        );
+        long started = System.nanoTime();
+        try {
+            TripDataBundle trip = persistenceService.loadTrip(id, userEmail);
+            return map(trip.trip(), trip.dayPlans(), trip.hotels());
+        } finally {
+            log.info("trip_detail_retrieval outcome=completed duration_ms={}", elapsedMillis(started));
+        }
     }
 
     @Override
     public List<TripDetailResponse> getMyTrips(String userEmail) {
-        User user = resolveUser(userEmail);
-        List<Trip> trips = tripRepository.findByUserOrderByCreatedAtDesc(user);
+        List<Trip> trips = persistenceService.loadMyTrips(userEmail);
         if (trips == null || trips.isEmpty()) {
             return List.of();
         }
@@ -289,40 +268,40 @@ public class TripServiceImpl implements TripService {
 
     @Override
     public void deleteTrip(Long id, String userEmail) {
-        Trip trip = tripRepository.findById(id)
-                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
-                        org.springframework.http.HttpStatus.NOT_FOUND, "Trip not found"
-                ));
-        validateOwnership(trip, userEmail);
-        dayPlanRepository.deleteByTrip(trip);
-        hotelSuggestionRepository.deleteByTrip(trip);
-        tripRepository.delete(trip);
+        persistenceService.deleteTrip(id, userEmail);
     }
 
     @Override
     public CoordinateBackfillReport backfillCoordinates(Long id, String userEmail, boolean dryRun) {
-        Trip trip = tripRepository.findById(id).orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Trip not found"));
-        validateOwnership(trip, userEmail);
+        TripDataBundle tripData = persistenceService.loadTrip(id, userEmail);
+        Trip trip = tripData.trip();
         int updated = 0, skipped = 0, failed = 0;
-        List<DayPlan> plans = dayPlanRepository.findByTripOrderByDayNumberAsc(trip);
+        List<DayPlan> plans = tripData.dayPlans();
+        List<HotelSuggestion> hotels = tripData.hotels();
+        Map<Long, GeoLocation> planLocations = new HashMap<>();
+        Map<Long, GeoLocation> hotelLocations = new HashMap<>();
+        Set<Long> clearHotelLocations = new HashSet<>();
         for (DayPlan plan : plans) {
             if (isUsableLocation(new GeoLocation(plan.getLatitude(), plan.getLongitude()))) { skipped++; continue; }
             GeoLocation location = geocodePlace(plan.getPlaceName(), trip.getDestination());
             if (!isUsableLocation(location)) { failed++; continue; }
             updated++;
-            if (!dryRun) { plan.setLatitude(location.getLatitude()); plan.setLongitude(location.getLongitude()); dayPlanRepository.save(plan); }
+            if (!dryRun) planLocations.put(plan.getId(), location);
         }
-        for (HotelSuggestion hotel : hotelSuggestionRepository.findByTrip(trip)) {
+        for (HotelSuggestion hotel : hotels) {
             boolean copiedDestination = sameLocation(hotel.getLatitude(), hotel.getLongitude(), trip.getLatitude(), trip.getLongitude());
             if (isUsableLocation(new GeoLocation(hotel.getLatitude(), hotel.getLongitude())) && !copiedDestination) { skipped++; continue; }
             GeoLocation location = locationOrNull(hotel.getName(), hotel.getAddress(), trip.getDestination(), true);
             if (!isUsableLocation(location)) {
                 failed++;
-                if (!dryRun && copiedDestination) { hotel.setLatitude(null); hotel.setLongitude(null); hotelSuggestionRepository.save(hotel); }
+                if (!dryRun && copiedDestination) clearHotelLocations.add(hotel.getId());
                 continue;
             }
             updated++;
-            if (!dryRun) { hotel.setLatitude(location.getLatitude()); hotel.setLongitude(location.getLongitude()); hotelSuggestionRepository.save(hotel); }
+            if (!dryRun) hotelLocations.put(hotel.getId(), location);
+        }
+        if (!dryRun && (updated > 0 || !clearHotelLocations.isEmpty())) {
+            persistenceService.applyCoordinateBackfill(id, userEmail, planLocations, hotelLocations, clearHotelLocations);
         }
         return CoordinateBackfillReport.builder().tripId(id).dryRun(dryRun).updated(updated).skipped(skipped).failed(failed).build();
     }
@@ -331,25 +310,36 @@ public class TripServiceImpl implements TripService {
     // HELPERS
     // =========================================================
     private List<PlaceResult> fetchPlacesSafely(Trip trip, int days) {
+        long started = System.nanoTime();
         try {
-            return Optional.ofNullable(
+            List<PlaceResult> results = Optional.ofNullable(
                     overpassService.getTouristPlaces(
                             trip.getLatitude(),
                             trip.getLongitude(),
                             days
                     )
             ).orElse(List.of());
+            log.info("overpass_stage=places outcome=success result_count={} duration_ms={}",
+                    results.size(), elapsedMillis(started));
+            return results;
         } catch (Exception e) {
+            log.warn("overpass_stage=places outcome=failure exception_type={} duration_ms={}",
+                    e.getClass().getSimpleName(), elapsedMillis(started));
             return List.of();
         }
     }
 
     private List<PlaceResult> fetchHotelsSafely(Trip trip) {
+        long started = System.nanoTime();
         try {
-            return Optional.ofNullable(overpassService.getHotels(trip.getLatitude(), trip.getLongitude()))
+            List<PlaceResult> results = Optional.ofNullable(overpassService.getHotels(trip.getLatitude(), trip.getLongitude()))
                     .orElse(List.of());
+            log.info("overpass_stage=hotels outcome=success result_count={} duration_ms={}",
+                    results.size(), elapsedMillis(started));
+            return results;
         } catch (Exception e) {
-            log.warn("Hotel fetch failed for {}: {}", trip.getDestination(), e.getMessage());
+            log.warn("overpass_stage=hotels outcome=failure exception_type={} duration_ms={}",
+                    e.getClass().getSimpleName(), elapsedMillis(started));
             return List.of();
         }
     }
@@ -439,17 +429,19 @@ public class TripServiceImpl implements TripService {
         if (placeName == null || placeName.isBlank() || destination == null || destination.isBlank()) {
             return null;
         }
+        long started = System.nanoTime();
         try {
             GeoLocation location = geocodingService.geocodeAttraction(placeName.trim(), destination.trim());
+            log.info("itinerary_stage=attraction_geocoding outcome={} duration_ms={}",
+                    isUsableLocation(location) ? "success" : "unresolved", elapsedMillis(started));
             if (isUsableLocation(location)) {
                 return location;
             }
         } catch (Exception e) {
-            log.warn("Could not geocode generated attraction '{}' in {}: {}", placeName, destination,
-                    e.getClass().getSimpleName());
+            log.info("itinerary_stage=attraction_geocoding outcome=failure exception_type={} duration_ms={}",
+                    e.getClass().getSimpleName(), elapsedMillis(started));
             return null;
         }
-        log.warn("Could not geocode generated attraction '{}' in {}", placeName, destination);
         return null;
     }
 
@@ -458,31 +450,6 @@ public class TripServiceImpl implements TripService {
                 ? geocodingService.geocodeHotel(name, address, destination)
                 : geocodingService.geocodeAttraction(name, destination);
         return isUsableLocation(location) ? location : null;
-    }
-
-    /**
-     * Repairs legacy fallback plans that were saved before their attraction lookup
-     * completed. Names and descriptions are never changed; unresolved places remain
-     * unresolved rather than receiving a destination-centre coordinate.
-     */
-    private void populateMissingPlanCoordinates(Trip trip, List<DayPlan> plans) {
-        List<DayPlan> updatedPlans = plans.stream()
-                .filter(plan -> !isUsableLocation(new GeoLocation(plan.getLatitude(), plan.getLongitude())))
-                .filter(plan -> plan.getPlaceName() != null && !plan.getPlaceName().isBlank())
-                .filter(plan -> {
-                    GeoLocation location = geocodePlace(plan.getPlaceName(), trip.getDestination());
-                    if (!isUsableLocation(location)) {
-                        return false;
-                    }
-                    plan.setLatitude(location.getLatitude());
-                    plan.setLongitude(location.getLongitude());
-                    return true;
-                })
-                .toList();
-
-        if (!updatedPlans.isEmpty()) {
-            dayPlanRepository.saveAll(updatedPlans);
-        }
     }
 
     private double distanceSquared(Trip trip, PlaceResult place) {
@@ -769,11 +736,7 @@ public class TripServiceImpl implements TripService {
                 )
                 .hotels(hotelDtos)
                 .budgetEstimates(generateBudgetEstimates(days, destination))
-                .weatherResponse(
-                        (t.getLatitude() != null && t.getLongitude() != null)
-                                ? weatherService.getForecast(t.getLatitude(), t.getLongitude(), t.getStartDate(), t.getEndDate())
-                                : null
-                )
+                .weatherResponse(null)
                 .build();
     }
 

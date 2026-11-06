@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/useAuth";
 import { forgotPassword, verifyResetOtp, resetPassword } from "../api/tripApi";
@@ -9,6 +9,9 @@ const Login = () => {
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [resendingOtp, setResendingOtp] = useState(false);
+  const [resendSeconds, setResendSeconds] = useState(0);
+  const resendInProgress = useRef(false);
   const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
@@ -27,13 +30,21 @@ const Login = () => {
       if (errorParam === "OAuthAuthenticationFailed") {
         setError("Google authentication failed. Please try again.");
       } else {
-        setError(errorParam);
+        setError("Unable to sign in. Please try again.");
       }
     }
     if (isAuthenticated) {
       navigate("/", { replace: true });
     }
   }, [isAuthenticated, navigate]);
+
+  useEffect(() => {
+    if (resetStep !== "verify" || resendSeconds <= 0) return undefined;
+    const timer = window.setTimeout(() => {
+      setResendSeconds((seconds) => Math.max(0, seconds - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [resetStep, resendSeconds]);
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -49,7 +60,16 @@ const Login = () => {
       await login(formData);
       navigate("/");
     } catch (err) {
-      setError(err.response?.data?.message || err.message || "Invalid email or password");
+      const status = err.response?.status;
+      if (status === 401) {
+        setError("Incorrect email or password.");
+      } else if (!err.response && (err.request || err.code === "ERR_NETWORK")) {
+        setError("Unable to connect. Please try again.");
+      } else if (status >= 500) {
+        setError("Server error. Please try again later.");
+      } else {
+        setError("Unable to sign in. Please try again.");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -63,13 +83,42 @@ const Login = () => {
 
     try {
       await forgotPassword(resetEmail);
-      setSuccessMessage("Password reset OTP sent. Check your email.");
+      setSuccessMessage("If an account is eligible for password reset, instructions will be sent.");
+      setResendSeconds(60);
       setResetStep("verify");
     } catch (err) {
-      setError(err.response?.data?.message || err.message || "Failed to request password reset");
+      setError(err.response?.data?.message || "We could not process this request right now. Please try again later.");
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleResendResetOtp = async () => {
+    if (resendInProgress.current || resendSeconds > 0) return;
+    resendInProgress.current = true;
+    setResendingOtp(true);
+    setError(null);
+    setSuccessMessage(null);
+
+    try {
+      await forgotPassword(resetEmail);
+      setSuccessMessage("If an account is eligible for password reset, another code will be sent.");
+      setOtp("");
+      setResendSeconds(60);
+    } catch {
+      setError("We couldn't resend the code. Please try again.");
+    } finally {
+      resendInProgress.current = false;
+      setResendingOtp(false);
+    }
+  };
+
+  const handleChangeResetEmail = () => {
+    setOtp("");
+    setResendSeconds(0);
+    setError(null);
+    setSuccessMessage(null);
+    setResetStep("request");
   };
 
   const handleVerifyOtp = async (e) => {
@@ -294,19 +343,29 @@ const Login = () => {
                 </button>
               </form>
 
-              <p style={{ marginTop: "20px", fontSize: "14px", color: "var(--text-secondary)" }}>
+              <div style={{ marginTop: "20px", fontSize: "14px", color: "var(--text-secondary)" }}>
                 <button
                   type="button"
-                  onClick={() => {
-                    setResetStep("request");
-                    setError(null);
-                    setSuccessMessage(null);
-                  }}
+                  onClick={handleResendResetOtp}
                   className="auth-link"
+                  disabled={resendSeconds > 0 || resendingOtp || submitting}
                 >
-                  Resend OTP / Change Email
+                  {resendingOtp
+                    ? "Sending OTP..."
+                    : resendSeconds > 0
+                      ? `Resend available in ${resendSeconds}s`
+                      : "Resend OTP"}
                 </button>
-              </p>
+                <button
+                  type="button"
+                  onClick={handleChangeResetEmail}
+                  className="auth-link"
+                  style={{ marginLeft: "12px" }}
+                  disabled={resendingOtp || submitting}
+                >
+                  Change Email
+                </button>
+              </div>
             </>
           )}
 

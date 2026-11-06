@@ -280,7 +280,7 @@ public class OverpassServiceImpl implements OverpassService {
                     long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
                     if (isTransientOverpassError(e)) {
                         hadTimeoutOrNetworkError = true;
-                        log.warn("{} request failed on {} with transient error after {} ms: {}. Retrying...", logPrefix, overpassUrl, durationMs, e.getMessage());
+                        log.warn("{} request failed after {} ms: {}. Retrying...", logPrefix, durationMs, e.getClass().getSimpleName());
                         if (retry < maxRetriesPerUrl && System.currentTimeMillis() + 1000 < deadline) {
                             try {
                                 Thread.sleep(500L * (retry + 1));
@@ -290,7 +290,7 @@ public class OverpassServiceImpl implements OverpassService {
                             continue;
                         }
                     } else {
-                        log.warn("{} request failed on {} after {} ms: {}", logPrefix, overpassUrl, durationMs, e.getMessage());
+                        log.warn("{} request failed after {} ms: {}", logPrefix, durationMs, e.getClass().getSimpleName());
                         hadTimeoutOrNetworkError = true;
                     }
                     break; // try next URL

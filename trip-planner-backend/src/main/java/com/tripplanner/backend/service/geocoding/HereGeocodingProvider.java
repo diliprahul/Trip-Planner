@@ -104,10 +104,10 @@ public class HereGeocodingProvider implements GeocodingProvider {
                 throw e;
             }
         } catch (ResourceAccessException e) {
-            log.warn("HERE Geocoding network/timeout error: {}", e.getMessage());
+            log.warn("HERE Geocoding network/timeout error: {}", e.getClass().getSimpleName());
             throw e;
         } catch (Exception e) {
-            log.warn("HERE Geocoding exception: {}", e.getMessage());
+            log.warn("HERE Geocoding exception: {}", e.getClass().getSimpleName());
             if (e instanceof RuntimeException re) throw re;
         }
 

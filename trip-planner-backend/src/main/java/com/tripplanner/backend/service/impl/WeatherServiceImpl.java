@@ -5,25 +5,84 @@ import com.tripplanner.backend.dto.WeatherResponseDto;
 import com.tripplanner.backend.service.WeatherService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @Slf4j
 public class WeatherServiceImpl implements WeatherService {
 
-    private final RestTemplate restTemplate;
+    private static final long CACHE_TTL_MILLIS = 10 * 60 * 1000L;
+    private static final int MAX_CACHE_ENTRIES = 256;
 
+    private final RestTemplate restTemplate;
+    private final Clock clock;
+    private final Map<ForecastKey, CacheEntry> cache = new LinkedHashMap<>(16, 0.75f, true);
+    private final Map<ForecastKey, CompletableFuture<WeatherResponseDto>> inFlight = new ConcurrentHashMap<>();
+
+    @Autowired
     public WeatherServiceImpl(RestTemplate restTemplate) {
+        this(restTemplate, Clock.systemUTC());
+    }
+
+    public WeatherServiceImpl(RestTemplate restTemplate, Clock clock) {
         this.restTemplate = restTemplate;
+        this.clock = clock;
     }
 
     @Override
     public WeatherResponseDto getForecast(Double lat, Double lon, LocalDate startDate, LocalDate endDate) {
+        if (lat == null || lon == null || lat < -90 || lat > 90 || lon < -180 || lon > 180
+                || startDate == null || endDate == null || startDate.isAfter(endDate)) {
+            return fetchForecast(lat, lon, startDate, endDate);
+        }
+
+        ForecastKey key = new ForecastKey(providerCoordinate(lat), providerCoordinate(lon), startDate, endDate);
+        long startedAt = System.nanoTime();
+        WeatherResponseDto cached = getCached(key);
+        if (cached != null) {
+            log.info("External request completed: service=weather stage=forecast outcome=cache_hit durationMs={}",
+                    elapsedMillis(startedAt));
+            return cached;
+        }
+
+        CompletableFuture<WeatherResponseDto> pending = new CompletableFuture<>();
+        CompletableFuture<WeatherResponseDto> existing = inFlight.putIfAbsent(key, pending);
+        if (existing != null) {
+            try {
+                return existing.join();
+            } catch (CompletionException exception) {
+                return apiFailure();
+            }
+        }
+
+        try {
+            WeatherResponseDto response = fetchForecast(lat, lon, startDate, endDate);
+            if (response.getStatus() != WeatherResponseDto.Status.API_ERROR) {
+                putCached(key, response);
+            }
+            pending.complete(response);
+            log.info("External request completed: service=weather stage=forecast outcome={} durationMs={}",
+                    response.getStatus(), elapsedMillis(startedAt));
+            return response;
+        } catch (RuntimeException exception) {
+            pending.complete(apiFailure());
+            log.warn("External request completed: service=weather stage=forecast outcome=exception durationMs={}",
+                    elapsedMillis(startedAt));
+            return apiFailure();
+        } finally {
+            inFlight.remove(key, pending);
+        }
+    }
+
+    private WeatherResponseDto fetchForecast(Double lat, Double lon, LocalDate startDate, LocalDate endDate) {
         if (lat == null || lon == null || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
             return WeatherResponseDto.builder()
                     .status(WeatherResponseDto.Status.API_ERROR)
@@ -128,13 +187,49 @@ public class WeatherServiceImpl implements WeatherService {
                     .build();
 
         } catch (Exception e) {
-            log.error("Failed to fetch weather", e);
+            log.warn("Weather provider failed. exceptionType={}", e.getClass().getSimpleName());
             return WeatherResponseDto.builder()
                     .status(WeatherResponseDto.Status.API_ERROR)
                     .message("Weather information could not be loaded at the moment.")
                     .build();
         }
     }
+
+    private synchronized WeatherResponseDto getCached(ForecastKey key) {
+        CacheEntry entry = cache.get(key);
+        if (entry == null) return null;
+        if (entry.expiresAtMillis() <= clock.millis()) {
+            cache.remove(key);
+            return null;
+        }
+        return entry.response();
+    }
+
+    private synchronized void putCached(ForecastKey key, WeatherResponseDto response) {
+        cache.put(key, new CacheEntry(response, clock.millis() + CACHE_TTL_MILLIS));
+        while (cache.size() > MAX_CACHE_ENTRIES) {
+            ForecastKey eldest = cache.keySet().iterator().next();
+            cache.remove(eldest);
+        }
+    }
+
+    private String providerCoordinate(double coordinate) {
+        return String.format(Locale.ROOT, "%.4f", coordinate);
+    }
+
+    private long elapsedMillis(long startedAtNanos) {
+        return (System.nanoTime() - startedAtNanos) / 1_000_000;
+    }
+
+    private WeatherResponseDto apiFailure() {
+        return WeatherResponseDto.builder()
+                .status(WeatherResponseDto.Status.API_ERROR)
+                .message("Weather information could not be loaded at the moment.")
+                .build();
+    }
+
+    private record ForecastKey(String latitude, String longitude, LocalDate startDate, LocalDate endDate) {}
+    private record CacheEntry(WeatherResponseDto response, long expiresAtMillis) {}
 
     private String mapWeatherCodeToCondition(int code) {
         switch (code) {

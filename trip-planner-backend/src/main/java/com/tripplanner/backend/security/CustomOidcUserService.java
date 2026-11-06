@@ -26,7 +26,7 @@ public class CustomOidcUserService extends OidcUserService {
         try {
             oidcUser = super.loadUser(userRequest);
         } catch (Exception e) {
-            log.error("CustomOidcUserService failed in super.loadUser: exception={}, message={}", e.getClass().getName(), e.getMessage());
+            log.error("OAuth user-info lookup failed; exceptionType={}", e.getClass().getSimpleName());
             throw e;
         }
 
@@ -45,10 +45,10 @@ public class CustomOidcUserService extends OidcUserService {
 
         try {
             User user = userService.processOAuthPostLogin("GOOGLE", providerId, email, name, isVerified, picture);
-            log.info("Successfully processed OAuth post login for email={}", email);
+            log.info("OAuth post-login completed successfully");
             return new DefaultOidcUser(oidcUser.getAuthorities(), oidcUser.getIdToken(), oidcUser.getUserInfo(), "email");
         } catch (Exception e) {
-            log.error("CustomOidcUserService failed in processOAuthPostLogin: exception={}, message={}", e.getClass().getName(), e.getMessage());
+            log.error("OAuth post-login processing failed; exceptionType={}", e.getClass().getSimpleName());
             throw new OAuth2AuthenticationException(e.getMessage() != null ? e.getMessage() : "OAuth authentication failed");
         }
     }

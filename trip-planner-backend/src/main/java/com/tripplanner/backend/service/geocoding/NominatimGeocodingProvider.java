@@ -102,7 +102,7 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
         if (!requireNamedPlace) {
             GeoLocation cityLoc = CURATED_CITIES.get(normalized);
             if (cityLoc != null && valid(cityLoc.getLatitude(), cityLoc.getLongitude())) {
-                log.info("Nominatim curated cities exact matched query='{}' -> {}", query, cityLoc);
+                log.info("geocoding_provider=nominatim stage=curated_city outcome=matched");
                 return cityLoc;
             }
         }
@@ -113,7 +113,7 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
             String curatedKey = normName + ", " + normDest;
             GeoLocation curatedLoc = CURATED_ATTRACTIONS.get(curatedKey);
             if (curatedLoc != null && valid(curatedLoc.getLatitude(), curatedLoc.getLongitude())) {
-                log.info("Nominatim curated registry exact matched name='{}' destination='{}' -> {}", expectedName, destination, curatedLoc);
+                log.info("geocoding_provider=nominatim stage=curated_attraction outcome=matched");
                 return curatedLoc;
             }
             for (Map.Entry<String, GeoLocation> entry : CURATED_ATTRACTIONS.entrySet()) {
@@ -123,7 +123,7 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
                     if (normName.contains(attractionPart) || attractionPart.contains(normName)) {
                         GeoLocation loc = entry.getValue();
                         if (loc != null && valid(loc.getLatitude(), loc.getLongitude())) {
-                            log.info("Nominatim curated registry flexible matched name='{}' destination='{}' -> {}", expectedName, destination, loc);
+                            log.info("geocoding_provider=nominatim stage=curated_attraction outcome=matched");
                             return loc;
                         }
                     }
@@ -146,20 +146,20 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
                 headers.set("User-Agent", nominatimUserAgent);
                 ResponseEntity<List> response = restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), List.class);
                 GeoLocation result = select(response.getBody(), expectedName, destination, requireNamedPlace);
-                log.info("Nominatim provider query='{}' result={}", normalized, result == null ? "no-valid-match" : "resolved");
+                log.info("geocoding_provider=nominatim outcome={}", result == null ? "unresolved" : "resolved");
                 return result;
             } catch (HttpStatusCodeException e) {
                 int status = e.getStatusCode().value();
                 if (status == 429 || status >= 500) {
-                    log.warn("Nominatim transient HTTP error {} for query '{}'", status, normalized);
+                    log.warn("Nominatim transient HTTP error {}", status);
                     if (attempt == 1) return null;
                 } else if (status == 403 || status == 404 || attempt == 1) {
-                    log.warn("Nominatim error {} for query '{}'", status, normalized);
+                    log.warn("Nominatim error {}", status);
                     return null;
                 }
                 sleep(retryDelay(e.getResponseHeaders(), attempt));
             } catch (Exception e) {
-                log.warn("Nominatim exception for query '{}': {}", normalized, e.getMessage());
+                log.warn("Nominatim request failed: {}", e.getClass().getSimpleName());
                 return null;
             }
         }
