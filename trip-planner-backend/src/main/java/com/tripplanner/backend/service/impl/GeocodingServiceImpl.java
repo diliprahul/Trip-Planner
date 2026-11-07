@@ -1,6 +1,9 @@
 package com.tripplanner.backend.service.impl;
 
 import com.tripplanner.backend.service.GeocodingService;
+import com.tripplanner.backend.service.GeocodingUnavailableException;
+import com.tripplanner.backend.entity.CityCoordinateCache;
+import com.tripplanner.backend.repository.CityCoordinateCacheRepository;
 import com.tripplanner.backend.service.geocoding.GeocodingProvider;
 import com.tripplanner.backend.util.GeoLocation;
 import lombok.extern.slf4j.Slf4j;
@@ -17,12 +20,18 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
+import java.time.Instant;
 
 @Service
 @Primary
 @Slf4j
 public class GeocodingServiceImpl implements GeocodingService {
     private final List<GeocodingProvider> providers;
+    private final CityCoordinateCacheRepository cityCache;
+    @Value("${geocoding.city-cache-ttl:30d}")
+    private Duration cityCacheTtl = Duration.ofDays(30);
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
     private static final long SUCCESS_TTL_MS = Duration.ofHours(24).toMillis();
@@ -30,16 +39,39 @@ public class GeocodingServiceImpl implements GeocodingService {
 
     private record CacheEntry(GeoLocation location, long expiresAtMs) {}
 
-    public GeocodingServiceImpl(List<GeocodingProvider> providers) {
+    @Autowired
+    public GeocodingServiceImpl(List<GeocodingProvider> providers, CityCoordinateCacheRepository cityCache) {
         List<GeocodingProvider> sorted = new ArrayList<>(providers != null ? providers : List.of());
         AnnotationAwareOrderComparator.sort(sorted);
         this.providers = Collections.unmodifiableList(sorted);
+        this.cityCache = cityCache;
         log.info("GeocodingServiceImpl initialized with providers: {}", this.providers.stream().map(GeocodingProvider::getProviderName).toList());
+    }
+
+    /** Retained for callers that construct the service directly (including legacy tests). */
+    public GeocodingServiceImpl(List<GeocodingProvider> providers) {
+        this(providers, null);
     }
 
     @Override
     public GeoLocation geocodeCity(String city) {
-        return lookup("CITY", city, null, city, false);
+        String key = normalize(city);
+        if (!key.isEmpty()) {
+            try {
+                if (cityCache != null) {
+                    CityCoordinateCache saved = cityCache.findById(key).orElse(null);
+                    if (saved != null && saved.getResolvedAt() != null && saved.getResolvedAt().plus(cityCacheTtl).isAfter(Instant.now()))
+                        return new GeoLocation(saved.getLatitude(), saved.getLongitude());
+                    if (saved != null) cityCache.delete(saved);
+                }
+            } catch (RuntimeException e) { log.warn("City coordinate cache read/cleanup failed; continuing with providers: {}", e.getClass().getSimpleName()); }
+        }
+        GeoLocation location = lookup("CITY", city, null, city, false);
+        if (location != null && !key.isEmpty() && cityCache != null) {
+            try { cityCache.save(new CityCoordinateCache(key, location.getLatitude(), location.getLongitude(), Instant.now())); }
+            catch (RuntimeException e) { log.warn("City coordinate cache write failed: {}", e.getClass().getSimpleName()); }
+        }
+        return location;
     }
 
     @Override
@@ -72,6 +104,8 @@ public class GeocodingServiceImpl implements GeocodingService {
         String finalProvider = "None";
         long startTime = System.currentTimeMillis();
         boolean transientErrorEncountered = false;
+        boolean usableProviderAttempted = false;
+        boolean allUsableProvidersTransient = true;
 
         for (GeocodingProvider provider : providers) {
             String providerName = provider.getProviderName();
@@ -81,6 +115,7 @@ public class GeocodingServiceImpl implements GeocodingService {
             }
 
             try {
+                usableProviderAttempted = true;
                 long providerStart = System.currentTimeMillis();
                 log.info("geocoding_stage={} provider={} outcome=started", type.toLowerCase(Locale.ROOT), providerName);
                 GeoLocation loc = provider.geocode(query, expectedName, destination, requireNamedPlace);
@@ -93,6 +128,7 @@ public class GeocodingServiceImpl implements GeocodingService {
                             type.toLowerCase(Locale.ROOT), providerName, duration);
                     break;
                 } else {
+                    allUsableProvidersTransient = false;
                     log.warn("geocoding_stage={} provider={} outcome=unresolved duration_ms={}",
                             type.toLowerCase(Locale.ROOT), providerName, duration);
                 }
@@ -101,7 +137,7 @@ public class GeocodingServiceImpl implements GeocodingService {
                 log.warn("Provider='{}' returned HTTP error {} for query", providerName, status);
                 if (status == 429 || status >= 500) {
                     transientErrorEncountered = true;
-                }
+                } else allUsableProvidersTransient = false;
             } catch (ResourceAccessException e) {
                 log.warn("geocoding_stage={} provider={} outcome=network_error exception_type={}",
                         type.toLowerCase(Locale.ROOT), providerName, e.getClass().getSimpleName());
@@ -110,6 +146,7 @@ public class GeocodingServiceImpl implements GeocodingService {
                 log.warn("geocoding_stage={} provider={} outcome=exception exception_type={}",
                         type.toLowerCase(Locale.ROOT), providerName, e.getClass().getSimpleName());
                 transientErrorEncountered = true;
+                allUsableProvidersTransient = false;
             }
         }
 
@@ -122,6 +159,9 @@ public class GeocodingServiceImpl implements GeocodingService {
             log.debug("geocoding_stage={} outcome=negative_cache_skipped reason=transient_provider_error",
                     type.toLowerCase(Locale.ROOT));
         }
+
+        if (result == null && transientErrorEncountered && usableProviderAttempted && allUsableProvidersTransient)
+            throw new GeocodingUnavailableException("Location lookup is temporarily unavailable. Please try again shortly.");
 
         log.info("geocoding_stage={} provider={} outcome={} duration_ms={}",
                 type.toLowerCase(Locale.ROOT), finalProvider, result == null ? "unresolved" : "success", totalDuration);

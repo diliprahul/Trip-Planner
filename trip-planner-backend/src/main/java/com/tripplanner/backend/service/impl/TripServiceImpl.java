@@ -100,6 +100,9 @@ public class TripServiceImpl implements TripService {
             } catch (RuntimeException exception) {
                 log.info("itinerary_stage=destination_geocoding outcome=failure exception_type={} duration_ms={}",
                         exception.getClass().getSimpleName(), elapsedMillis(geocodeStarted));
+                if (exception instanceof com.tripplanner.backend.service.GeocodingUnavailableException)
+                    throw new org.springframework.web.server.ResponseStatusException(
+                            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage());
                 throw exception;
             }
 

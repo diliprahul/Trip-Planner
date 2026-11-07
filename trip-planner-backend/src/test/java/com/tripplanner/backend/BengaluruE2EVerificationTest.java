@@ -18,6 +18,7 @@ import com.tripplanner.backend.service.GeocodingService;
 import com.tripplanner.backend.service.EmailDeliveryService;
 import com.tripplanner.backend.service.GeminiService;
 import com.tripplanner.backend.service.OverpassService;
+import com.tripplanner.backend.service.S3Service;
 import com.tripplanner.backend.util.GeoLocation;
 import com.tripplanner.backend.util.PlaceResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -84,10 +85,15 @@ class BengaluruE2EVerificationTest {
     @MockBean
     private GeocodingService geocodingService;
 
+    @MockBean
+    private S3Service s3Service;
+
     @BeforeEach
     void setUp() {
         pendingRegistrationRepository.deleteAll();
         when(emailDeliveryService.send(anyString(), anyString(), anyString())).thenReturn(true);
+        when(s3Service.uploadFile(any(), anyString())).thenReturn("https://example.test/profile.jpg");
+        when(s3Service.getFileUrl(anyString())).thenReturn("https://example.test/profile.jpg");
         hotelSuggestionRepository.deleteAll();
         dayPlanRepository.deleteAll();
         tripRepository.deleteAll();

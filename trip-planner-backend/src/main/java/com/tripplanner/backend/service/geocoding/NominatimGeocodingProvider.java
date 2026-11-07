@@ -1,9 +1,10 @@
 package com.tripplanner.backend.service.geocoding;
 
 import com.tripplanner.backend.util.GeoLocation;
-import lombok.RequiredArgsConstructor;
+import com.tripplanner.backend.service.impl.NominatimRateLimiter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
@@ -13,22 +14,48 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.*;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 
 @Component
 @Order(1)
-@RequiredArgsConstructor
 @Slf4j
 public class NominatimGeocodingProvider implements GeocodingProvider {
     private static final String SEARCH_URL = "https://nominatim.openstreetmap.org/search";
-    private static final Object RATE_LOCK = new Object();
-    private static long nextRequestAtMs;
     private final RestTemplate restTemplate;
+    private final NominatimRateLimiter rateLimiter;
+
+    @Autowired
+    public NominatimGeocodingProvider(RestTemplate restTemplate, NominatimRateLimiter rateLimiter) {
+        this.restTemplate = restTemplate;
+        this.rateLimiter = rateLimiter;
+    }
+
+    /** Retained for direct legacy construction; production wiring uses the rate-limited constructor. */
+    public NominatimGeocodingProvider(RestTemplate restTemplate) {
+        this(restTemplate, null);
+    }
 
     @Value("${geocoding.nominatim.enabled:true}")
     private boolean enabled;
 
-    @Value("${geocoding.nominatim.user-agent:TripPlanner/1.0 (contact: support@tripplanner.local)}")
-    private String nominatimUserAgent = "TripPlanner/1.0 (contact: support@tripplanner.local)";
+    @Value("${geocoding.nominatim.user-agent:TripPlanner/1.0}")
+    private String nominatimUserAgent;
+
+    @Value("${geocoding.nominatim.contact-email:}")
+    private String nominatimContactEmail;
+
+    @jakarta.annotation.PostConstruct
+    void configureUserAgent() {
+        if (nominatimUserAgent == null || nominatimUserAgent.isBlank()) {
+            nominatimUserAgent = "TripPlanner/1.0";
+            if (nominatimContactEmail != null && !nominatimContactEmail.isBlank())
+                nominatimUserAgent += " (contact: " + nominatimContactEmail.trim() + ")";
+        }
+        if (nominatimContactEmail == null || nominatimContactEmail.isBlank())
+            log.warn("NOMINATIM_CONTACT_EMAIL is not configured; set a real monitored contact email before enabling production Nominatim requests");
+    }
 
     private static final Map<String, GeoLocation> CURATED_CITIES;
     static {
@@ -141,7 +168,8 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
 
         for (int attempt = 0; attempt < 2; attempt++) {
             try {
-                awaitRateLimit();
+                if (rateLimiter == null) throw new IllegalStateException("Nominatim shared rate limiter is not configured");
+                rateLimiter.awaitTurn();
                 HttpHeaders headers = new HttpHeaders();
                 headers.set("User-Agent", nominatimUserAgent);
                 ResponseEntity<List> response = restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), List.class);
@@ -153,11 +181,19 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
                 if (status == 429 || status >= 500) {
                     log.warn("Nominatim transient HTTP error {}", status);
                     if (attempt == 1) return null;
+                    if (status == 429) {
+                        long retryAt = retryAt(e.getResponseHeaders());
+                        try { rateLimiter.deferUntil(retryAt); }
+                        catch (RuntimeException coordinationFailure) { throw coordinationFailure; }
+                    }
                 } else if (status == 403 || status == 404 || attempt == 1) {
                     log.warn("Nominatim error {}", status);
                     return null;
                 }
-                sleep(retryDelay(e.getResponseHeaders(), attempt));
+                if (status == 429) rateLimiter.awaitTurn();
+                else sleep(retryDelay(e.getResponseHeaders(), attempt));
+            } catch (IllegalStateException e) {
+                throw e;
             } catch (Exception e) {
                 log.warn("Nominatim request failed: {}", e.getClass().getSimpleName());
                 return null;
@@ -232,11 +268,13 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
         return value == null ? "" : value.toLowerCase(Locale.ROOT).replaceAll("[^\\p{IsAlphabetic}\\p{IsDigit}]+", " ").trim().replaceAll("\\s+", " ");
     }
 
-    private void awaitRateLimit() {
-        synchronized (RATE_LOCK) {
-            long wait = nextRequestAtMs - System.currentTimeMillis();
-            if (wait > 0) sleep(wait);
-            nextRequestAtMs = System.currentTimeMillis() + 1_000;
+    private long retryAt(HttpHeaders headers) {
+        String value = headers == null ? null : headers.getFirst("Retry-After");
+        if (value == null || value.isBlank()) return System.currentTimeMillis() + 1_000L;
+        try { return System.currentTimeMillis() + Math.max(0, Long.parseLong(value)) * 1_000L; }
+        catch (NumberFormatException ignored) {
+            try { return Math.max(System.currentTimeMillis(), ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()); }
+            catch (DateTimeParseException invalidDate) { return System.currentTimeMillis() + 1_000L; }
         }
     }
 
