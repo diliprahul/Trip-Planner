@@ -5,6 +5,8 @@ import com.tripplanner.backend.service.geocoding.GoogleGeocodingProvider;
 import com.tripplanner.backend.service.geocoding.HereGeocodingProvider;
 import com.tripplanner.backend.service.geocoding.NominatimGeocodingProvider;
 import com.tripplanner.backend.util.GeoLocation;
+import com.tripplanner.backend.entity.CityCoordinateCache;
+import com.tripplanner.backend.repository.CityCoordinateCacheRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -15,6 +17,9 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
+import java.time.Instant;
+import java.time.Duration;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -43,7 +48,45 @@ class GeocodingServiceImplTest {
         when(googleProvider.isEnabled()).thenReturn(true);
         when(hereProvider.isEnabled()).thenReturn(true);
 
-        geocodingService = new GeocodingServiceImpl(List.of(nominatimProvider, googleProvider, hereProvider));
+        geocodingService = new GeocodingServiceImpl(List.of(nominatimProvider, googleProvider, hereProvider), Mockito.mock(CityCoordinateCacheRepository.class));
+    }
+
+    @Test
+    void persistentCityCacheUsesNormalizedKeysAndPreventsProviderCalls() {
+        CityCoordinateCacheRepository repository = mock(CityCoordinateCacheRepository.class);
+        when(repository.findById("new delhi")).thenReturn(Optional.of(new CityCoordinateCache("new delhi", 28.6, 77.2, Instant.now())));
+        GeocodingServiceImpl service = new GeocodingServiceImpl(List.of(nominatimProvider), repository);
+        GeoLocation location = service.geocodeCity(" New-Delhi ");
+        assertEquals(28.6, location.getLatitude());
+        verify(nominatimProvider, never()).geocode(any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    void expiredPersistentCityEntryIsDeletedAndRefreshed() {
+        CityCoordinateCacheRepository repository = mock(CityCoordinateCacheRepository.class);
+        when(repository.findById("oslo")).thenReturn(Optional.of(new CityCoordinateCache("oslo", 0.0, 0.0, Instant.now().minus(Duration.ofDays(31)))));
+        when(nominatimProvider.geocode(eq("Oslo"), any(), any(), eq(false))).thenReturn(new GeoLocation(59.9, 10.7));
+        GeocodingServiceImpl service = new GeocodingServiceImpl(List.of(nominatimProvider), repository);
+        assertEquals(59.9, service.geocodeCity("Oslo").getLatitude());
+        verify(repository).delete(any(CityCoordinateCache.class));
+        verify(repository).save(any(CityCoordinateCache.class));
+    }
+
+    @Test
+    void cacheDatabaseFailureDoesNotInterruptProviderLookup() {
+        CityCoordinateCacheRepository repository = mock(CityCoordinateCacheRepository.class);
+        when(repository.findById(anyString())).thenThrow(new RuntimeException("db unavailable"));
+        when(nominatimProvider.geocode(eq("Oslo"), any(), any(), eq(false))).thenReturn(new GeoLocation(59.9, 10.7));
+        assertEquals(59.9, new GeocodingServiceImpl(List.of(nominatimProvider), repository).geocodeCity("Oslo").getLatitude());
+    }
+
+    @Test
+    void allEnabledProvidersTemporarilyFailProducesUnavailableException() {
+        when(nominatimProvider.geocode(any(), any(), any(), anyBoolean())).thenThrow(new ResourceAccessException("down"));
+        when(googleProvider.geocode(any(), any(), any(), anyBoolean())).thenThrow(new ResourceAccessException("down"));
+        when(hereProvider.geocode(any(), any(), any(), anyBoolean())).thenThrow(new ResourceAccessException("down"));
+        assertThrows(com.tripplanner.backend.service.GeocodingUnavailableException.class,
+                () -> geocodingService.geocodeCity("Oslo"));
     }
 
     @Test
