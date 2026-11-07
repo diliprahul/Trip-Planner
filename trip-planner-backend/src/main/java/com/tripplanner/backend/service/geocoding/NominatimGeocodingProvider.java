@@ -50,8 +50,11 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
     void configureUserAgent() {
         if (nominatimUserAgent == null || nominatimUserAgent.isBlank()) {
             nominatimUserAgent = "TripPlanner/1.0";
-            if (nominatimContactEmail != null && !nominatimContactEmail.isBlank())
+        }
+        if (nominatimUserAgent.equals("TripPlanner/1.0") && nominatimContactEmail != null && !nominatimContactEmail.isBlank()) {
+            if (!nominatimUserAgent.contains("(contact:")) {
                 nominatimUserAgent += " (contact: " + nominatimContactEmail.trim() + ")";
+            }
         }
         if (nominatimContactEmail == null || nominatimContactEmail.isBlank())
             log.warn("NOMINATIM_CONTACT_EMAIL is not configured; set a real monitored contact email before enabling production Nominatim requests");
@@ -190,8 +193,9 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
                     log.warn("Nominatim error {}", status);
                     return null;
                 }
-                if (status == 429) rateLimiter.awaitTurn();
-                else sleep(retryDelay(e.getResponseHeaders(), attempt));
+                if (status != 429) {
+                    sleep(retryDelay(e.getResponseHeaders(), attempt));
+                }
             } catch (IllegalStateException e) {
                 throw e;
             } catch (Exception e) {
